@@ -105,13 +105,13 @@ namespace fat
 	class driver
 	{
 	public:
-		explicit driver(const char* filename);
+		explicit driver(std::string_view path);
 
 		std::vector<directory_entry> read_root_directory();
 		std::vector<std::byte> read_fat();
 
 		template <bool IsDirectory, std::enable_if_t<IsDirectory>* = nullptr>
-		std::vector<directory_entry> read_file(const char* path)
+		std::vector<directory_entry> read_file(std::string_view path)
 		{
 			auto contents = read_file_internal(path, true);
 
@@ -132,7 +132,7 @@ namespace fat
 		}
 
 		template <bool IsDirectory = false, std::enable_if_t<!IsDirectory>* = nullptr>
-		std::basic_string<std::byte> read_file(const char* path)
+		std::basic_string<std::byte> read_file(std::string_view path)
 		{
 			return read_file_internal(path, false);
 		}
@@ -143,6 +143,6 @@ namespace fat
 		std::ifstream m_ifs;
 		bpb m_bpb;
 
-		std::basic_string<std::byte> read_file_internal(const char* path, bool is_directory);
+		std::basic_string<std::byte> read_file_internal(std::string_view path, bool is_directory);
 	};
 }

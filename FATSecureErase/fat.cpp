@@ -68,76 +68,9 @@ std::string convert_8_3_to_normal(const std::string& name)
 	return result;
 }
 
-/*
-int fat_read_file(const struct fat_open_context* ctx, const struct fat_directory_entry* parent,
-                  const size_t parent_entries, const char* name, const char* ext, const int attribute, void* buffer)
+fat::driver::driver(std::string_view path) : m_bpb()
 {
-	for (
-		const struct fat_directory_entry* q = parent; q < parent + parent_entries; q++)
-	{
-		if (!(_strnicmp(name, q->name, 8) == 0 &&
-			_strnicmp(ext, q->extension, 3) == 0 &&
-			attribute == q->attributes))
-			continue;
-
-		const size_t sectors_per_fat = ctx->bpb.offset_36.fat32.sectors_per_fat_32;
-		const size_t start_of_data_region = ctx->bpb.reserved_sectors + ctx->bpb.number_of_fats * sectors_per_fat + ctx
-			->bpb.root_dir_entries * sizeof(struct fat_directory_entry) / ctx->bpb.bytes_per_sector;
-		const size_t bytes_per_cluster = ctx->bpb.sectors_per_cluster * ctx->bpb.bytes_per_sector;
-
-		// allocate memory for the FAT
-		uint32_t* fat = malloc(ctx->bpb.number_of_fats * sectors_per_fat * ctx->bpb.bytes_per_sector);
-		if (fat_read_fat(ctx, fat))
-			return 1;
-
-		// get root directory first cluster index
-		uint32_t index = q->first_cluster_low | q->first_cluster_high << 16;
-		size_t size = 0; // for when buffer is NULL
-		uint8_t* p = buffer;
-
-		do
-		{
-			if (p == nullptr)
-			{
-				size += bytes_per_cluster;
-			}
-			else
-			{
-				// seek to position of cluster in disk
-				if (fseek(
-					ctx->fp,
-					(start_of_data_region + (index - 2) * ctx->bpb.sectors_per_cluster) * ctx->bpb.bytes_per_sector,
-					SEEK_SET))
-					return 2;
-
-				// read cluster
-				if (fread(p, 1, bytes_per_cluster, ctx->fp) != bytes_per_cluster)
-					return 3;
-
-				// advance pointer by number of bytes read
-				p += bytes_per_cluster;
-			}
-
-			// get next cluster index
-			index = fat[index];
-		}
-		while (index < 0x0FFFFFF7);
-		// indices greater than 0x0FFFFFF6 are either damaged or indicates the last cluster in the chain
-
-		free(fat);
-
-		if (p == nullptr)
-			return size; // return size of file
-	}
-
-	return 0;
-}
-
-*/
-
-fat::driver::driver(const char* filename) : m_bpb()
-{
-	std::ifstream ifs{filename, std::ios::binary};
+	std::ifstream ifs{path.data(), std::ios::binary};
 	m_ifs = std::move(ifs);
 
 	// copy BPB to struct
@@ -223,7 +156,7 @@ std::vector<std::byte> fat::driver::read_fat()
 	return fat;
 }
 
-std::basic_string<std::byte> fat::driver::read_file_internal(const char* path, bool is_directory)
+std::basic_string<std::byte> fat::driver::read_file_internal(std::string_view path, bool is_directory)
 {
 	using binary_string = std::basic_string<std::byte>;
 
