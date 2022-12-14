@@ -1,5 +1,73 @@
 #include "fat.hpp"
 
+#include <algorithm>
+#include <sstream>
+
+std::string convert_normal_to_8_3(const std::string& name)
+{
+	std::string result;
+	result.reserve(11);
+
+	auto it = name.begin();
+	const auto end = name.end();
+
+	// Copy the first 8 characters or up to the first dot
+	for (int i = 0; i < 8 && it != end && *it != '.'; ++i, ++it)
+		result += *it;
+
+	// pad with spaces
+	for (auto i = result.size(); i < 8; ++i)
+		result += ' ';
+
+	// skip dot
+	if (it != end && *it == '.')
+		++it;
+
+	// copy the extension
+	for (int i = 0; i < 3 && it != end; ++i, ++it)
+		result += *it;
+
+	// pad with spaces
+	for (auto i = result.size(); i < 11; ++i)
+		result += ' ';
+
+	// uppercase
+	std::transform(result.begin(), result.end(), result.begin(), toupper);
+
+	return result;
+}
+
+std::string convert_8_3_to_normal(const std::string& name)
+{
+	std::string result;
+	result.reserve(11);
+
+	auto it = name.begin();
+	const auto end = name.end();
+
+	// Copy the first 8 characters
+	for (int i = 0; i < 8 && it != end; ++i, ++it)
+		result += *it;
+
+	// Skip trailing spaces
+	while (it != end && *it == ' ')
+		++it;
+
+	// If there is an extension, add a dot
+	if (it != end)
+		result += '.';
+
+	// Copy the extension
+	for (int i = 0; i < 3 && it != end; ++i, ++it)
+		result += *it;
+
+	// Skip trailing spaces
+	while (it != end && *it == ' ')
+		++it;
+
+	return result;
+}
+
 /*
 int fat_read_file(const struct fat_open_context* ctx, const struct fat_directory_entry* parent,
                   const size_t parent_entries, const char* name, const char* ext, const int attribute, void* buffer)
@@ -67,9 +135,9 @@ int fat_read_file(const struct fat_open_context* ctx, const struct fat_directory
 
 */
 
-fat::driver::driver(std::string_view filename) : m_bpb()
+fat::driver::driver(const char* filename) : m_bpb()
 {
-	std::ifstream ifs{filename.data(), std::ios::binary};
+	std::ifstream ifs{filename, std::ios::binary};
 	m_ifs = std::move(ifs);
 
 	// copy BPB to struct
@@ -140,19 +208,126 @@ std::vector<fat::directory_entry> fat::driver::read_root_directory()
 	return root_directory;
 }
 
-std::vector<uint8_t> fat::driver::read_fat()
+std::vector<std::byte> fat::driver::read_fat()
 {
 	const size_t sectors_per_fat = m_bpb.sectors_per_fat_16 == 0
 		                               ? m_bpb.offset_36.fat32.sectors_per_fat_32
 		                               : m_bpb.sectors_per_fat_16;
 	const size_t fat_bytes = sectors_per_fat * m_bpb.number_of_fats * m_bpb.bytes_per_sector;
 
-	std::vector<uint8_t> fat(fat_bytes);
+	std::vector<std::byte> fat(fat_bytes);
 
 	m_ifs.seekg(m_bpb.reserved_sectors * m_bpb.bytes_per_sector, std::ios::beg);
 	m_ifs.read(reinterpret_cast<char*>(fat.data()), fat_bytes);
 
 	return fat;
+}
+
+std::basic_string<std::byte> fat::driver::read_file_internal(const char* path, bool is_directory)
+{
+	using binary_string = std::basic_string<std::byte>;
+
+	const std::string lpath{path};
+	std::string tmp;
+
+	std::stringstream ss{lpath};
+	std::vector<std::string> path_components{};
+
+	while (std::getline(ss, tmp, '\\'))
+		path_components.emplace_back(convert_normal_to_8_3(tmp));
+
+	binary_string contents{};
+
+	auto parent = read_root_directory();
+
+	for (size_t i = 0; i < path_components.size(); i++)
+	{
+		auto& x = path_components[i];
+
+		// find directory entry
+		auto entry = std::find_if(parent.begin(), parent.end(),
+		                          [&i, &path_components, &x, &is_directory](const directory_entry& y)
+		                          {
+			                          const bool v1 = std::strncmp(x.data(), y.name, 8) == 0;
+			                          const bool v2 = std::strncmp(x.data() + 8, y.extension, 3) == 0;
+
+			                          // if there are more path components then this one must be a directory
+			                          // otherwise, if is_directory is true then this one must be a directory, else a file
+			                          return v1 && v2 && (i != path_components.size() - 1
+				                                              ? y.attributes & static_cast<int>(
+					                                              directory_entry_attribute::directory)
+				                                              : (is_directory
+					                                                 ? y.attributes & static_cast<int>(
+						                                                 directory_entry_attribute::directory)
+					                                                 : !(y.attributes & static_cast<int>(
+						                                                 directory_entry_attribute::directory))));
+		                          });
+
+		if (entry == parent.end())
+			throw std::runtime_error{"file '" + convert_8_3_to_normal(x) + "' not found"};
+
+		// if entry is file and there are more path components then throw exception
+		if (i != path_components.size() - 1 && !(entry->attributes & static_cast<int>(
+			directory_entry_attribute::directory)))
+		{
+			throw std::runtime_error{
+				"file '" + convert_8_3_to_normal(x) + "' is not a directory, trying to browse contents of it"
+			};
+		}
+
+		const size_t sectors_per_fat = m_bpb.sectors_per_fat_16 == 0
+			                               ? m_bpb.offset_36.fat32.sectors_per_fat_32
+			                               : m_bpb.sectors_per_fat_16;
+		const size_t start_of_root_directory = m_bpb.reserved_sectors + m_bpb.number_of_fats * sectors_per_fat;
+		const size_t start_of_data_region = start_of_root_directory + m_bpb.root_dir_entries;
+		const size_t bytes_per_cluster = m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector;
+
+		const auto fsver = type();
+
+		auto fat = read_fat();
+
+		size_t cluster = entry->first_cluster_low | entry->first_cluster_high << 16;
+		size_t reserve = 0;
+
+		do
+		{
+			// seek to position of cluster in disk
+			m_ifs.seekg((start_of_data_region + (cluster - 2) * m_bpb.sectors_per_cluster) * m_bpb.bytes_per_sector,
+			            std::ios::beg);
+
+			contents.resize(reserve += bytes_per_cluster);
+
+			// read cluster
+			m_ifs.read(reinterpret_cast<char*>(contents.data() + reserve - bytes_per_cluster),
+			           bytes_per_cluster);
+
+			if (fsver == type::fat12)
+			{
+				cluster = reinterpret_cast<uint16_t*>(fat.data())[cluster];
+				cluster = cluster / 2 + cluster;
+
+				if (cluster % 2 == 0)
+					cluster &= 0xFFF;
+				else
+					cluster >>= 4;
+			}
+			else if (fsver == type::fat16)
+			{
+				cluster = reinterpret_cast<uint16_t*>(fat.data())[cluster];
+			}
+			else
+			{
+				cluster = reinterpret_cast<uint32_t*>(fat.data())[cluster];
+			}
+		}
+		while ((fsver == type::fat12 && cluster < 0xFF7) || (fsver == type::fat16 && cluster < 0xFFF7) || (fsver ==
+			type::fat32 && cluster < 0x0FFFFFF7));
+
+		// resize contents to actual size
+		contents = binary_string{contents.data(), contents.data() + entry->file_size};
+	}
+
+	return contents;
 }
 
 fat::type fat::driver::type() const

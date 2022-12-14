@@ -81,7 +81,7 @@ namespace fat
 	};
 
 #pragma pack(pop)
-	
+
 #pragma endregion
 
 	enum class type
@@ -91,19 +91,58 @@ namespace fat
 		fat32
 	};
 
+	enum class directory_entry_attribute
+	{
+		read_only = 0x01,
+		hidden = 0x02,
+		system = 0x04,
+		volume_id = 0x08,
+		directory = 0x10,
+		archive = 0x20,
+		long_name = read_only | hidden | system | volume_id
+	};
+
 	class driver
 	{
 	public:
-		explicit driver(std::string_view filename);
-		explicit driver(std::istream&& is);
-		explicit driver(std::ifstream&& ifs);
+		explicit driver(const char* filename);
 
 		std::vector<directory_entry> read_root_directory();
-		std::vector<uint8_t> read_fat();
+		std::vector<std::byte> read_fat();
+
+		template <bool IsDirectory, std::enable_if_t<IsDirectory>* = nullptr>
+		std::vector<directory_entry> read_file(const char* path)
+		{
+			auto contents = read_file_internal(path, true);
+
+			const auto ptr = contents.data();
+			const auto len = contents.size() / sizeof(directory_entry);
+			const auto arr = reinterpret_cast<directory_entry*>(ptr);
+
+			std::vector dir(arr, arr + len);
+
+			// remove null entries
+			dir.erase(std::remove_if(dir.begin(), dir.end(), [](const directory_entry& x)
+			{
+				return x.name[0] == '\0' && x.extension[0] == '\0';
+			}), dir.end());
+			dir.shrink_to_fit();
+
+			return dir;
+		}
+
+		template <bool IsDirectory = false, std::enable_if_t<!IsDirectory>* = nullptr>
+		std::basic_string<std::byte> read_file(const char* path)
+		{
+			return read_file_internal(path, false);
+		}
+
 		type type() const;
 
 	private:
 		std::ifstream m_ifs;
 		bpb m_bpb;
+
+		std::basic_string<std::byte> read_file_internal(const char* path, bool is_directory);
 	};
 }
