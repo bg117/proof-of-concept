@@ -20,7 +20,7 @@ std::string convert_normal_to_8_3(const std::string& name)
 		result += ' ';
 
 	// skip dot
-	if (it != end && *it == '.')
+	if (*it == '.')
 		++it;
 
 	// copy the extension
@@ -39,31 +39,34 @@ std::string convert_normal_to_8_3(const std::string& name)
 
 std::string convert_8_3_to_normal(const std::string& name)
 {
+	std::string r = name;
+	// if r is not 11 characters long, pad with spaces
+	if (r.size() < 11)
+		r.resize(11, ' ');
+
 	std::string result;
 	result.reserve(11);
 
-	auto it = name.begin();
-	const auto end = name.end();
+	auto it = r.begin();
+	const auto end = r.end();
 
-	// Copy the first 8 characters
+	// copy the first 8 characters
 	for (int i = 0; i < 8 && it != end; ++i, ++it)
 		result += *it;
 
-	// Skip trailing spaces
-	while (it != end && *it == ' ')
-		++it;
+	// remove trailing spaces
+	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
 
-	// If there is an extension, add a dot
-	if (it != end)
+	// if there is an extension, add a dot
+	if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
 		result += '.';
 
-	// Copy the extension
+	// copy the extension
 	for (int i = 0; i < 3 && it != end; ++i, ++it)
 		result += *it;
 
-	// Skip trailing spaces
-	while (it != end && *it == ' ')
-		++it;
+	// remove trailing spaces
+	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
 
 	return result;
 }
