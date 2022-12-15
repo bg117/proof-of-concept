@@ -96,20 +96,44 @@ std::vector<std::byte> fat::driver::read_fat()
 	return fat;
 }
 
+std::vector<fat::directory_entry> fat::driver::read_directory(const std::string_view path)
+{
+	auto contents = read_file_internal(path, true);
+
+	const auto ptr = contents.data();
+	const auto len = contents.size() / sizeof(directory_entry);
+	const auto arr = reinterpret_cast<directory_entry*>(ptr);
+
+	std::vector dir(arr, arr + len);
+
+	// remove null entries
+	dir.erase(std::remove_if(dir.begin(), dir.end(), [](const directory_entry& x)
+	{
+		return x.name[0] == '\0' && x.extension[0] == '\0';
+	}), dir.end());
+	dir.shrink_to_fit();
+
+	return dir;
+}
+
+std::basic_string<std::byte> fat::driver::read_file(const std::string_view path)
+{
+	return read_file_internal(path, false);
+}
+
 std::basic_string<std::byte> fat::driver::read_file_internal(const std::string_view path, bool is_directory)
 {
-	using binary_string = std::basic_string<std::byte>;
-
 	const std::string lpath{path};
 	std::string tmp;
 
 	std::stringstream ss{lpath};
 	std::vector<std::string> path_components{};
 
+	// split on backslash
 	while (std::getline(ss, tmp, '\\'))
 		path_components.emplace_back(convert_normal_to_8_3(tmp));
 
-	binary_string contents{};
+	std::basic_string<std::byte> contents{};
 
 	auto parent = read_root_directory();
 
@@ -197,7 +221,7 @@ std::basic_string<std::byte> fat::driver::read_file_internal(const std::string_v
 			type::fat32 && cluster < 0x0FFFFFF7));
 
 		// resize contents to actual size
-		contents = binary_string{contents.data(), contents.data() + entry->file_size};
+		contents = {contents.data(), contents.data() + entry->file_size};
 	}
 
 	return contents;
@@ -283,7 +307,8 @@ namespace
 			result += *it;
 
 		// remove trailing spaces
-		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
+		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(),
+		             result.end());
 
 		// if there is an extension, add a dot
 		if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
@@ -294,7 +319,8 @@ namespace
 			result += *it;
 
 		// remove trailing spaces
-		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
+		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(),
+		             result.end());
 
 		return result;
 	}

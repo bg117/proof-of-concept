@@ -109,33 +109,9 @@ namespace fat
 
 		std::vector<directory_entry> read_root_directory();
 		std::vector<std::byte> read_fat();
-
-		template <bool IsDirectory, std::enable_if_t<IsDirectory>* = nullptr>
-		std::vector<directory_entry> read_file(const std::string_view path)
-		{
-			auto contents = read_file_internal(path, true);
-
-			const auto ptr = contents.data();
-			const auto len = contents.size() / sizeof(directory_entry);
-			const auto arr = reinterpret_cast<directory_entry*>(ptr);
-
-			std::vector dir(arr, arr + len);
-
-			// remove null entries
-			dir.erase(std::remove_if(dir.begin(), dir.end(), [](const directory_entry& x)
-			{
-				return x.name[0] == '\0' && x.extension[0] == '\0';
-			}), dir.end());
-			dir.shrink_to_fit();
-
-			return dir;
-		}
-
-		template <bool IsDirectory = false, std::enable_if_t<!IsDirectory>* = nullptr>
-		std::basic_string<std::byte> read_file(const std::string_view path)
-		{
-			return read_file_internal(path, false);
-		}
+		
+		std::vector<directory_entry> read_directory(std::string_view path);
+		std::basic_string<std::byte> read_file(std::string_view path);
 
 		type type() const;
 
@@ -143,6 +119,6 @@ namespace fat
 		std::ifstream m_ifs;
 		bpb m_bpb;
 
-		std::basic_string<std::byte> read_file_internal(const std::string_view path, bool is_directory);
+		std::basic_string<std::byte> read_file_internal(std::string_view path, bool is_directory);
 	};
 }
