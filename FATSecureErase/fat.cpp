@@ -3,72 +3,10 @@
 #include <algorithm>
 #include <sstream>
 
-std::string convert_normal_to_8_3(const std::string& name)
+namespace
 {
-	std::string result;
-	result.reserve(11);
-
-	auto it = name.begin();
-	const auto end = name.end();
-
-	// Copy the first 8 characters or up to the first dot
-	for (int i = 0; i < 8 && it != end && *it != '.'; ++i, ++it)
-		result += *it;
-
-	// pad with spaces
-	for (auto i = result.size(); i < 8; ++i)
-		result += ' ';
-
-	// skip dot
-	if (*it == '.')
-		++it;
-
-	// copy the extension
-	for (int i = 0; i < 3 && it != end; ++i, ++it)
-		result += *it;
-
-	// pad with spaces
-	for (auto i = result.size(); i < 11; ++i)
-		result += ' ';
-
-	// uppercase
-	std::transform(result.begin(), result.end(), result.begin(), toupper);
-
-	return result;
-}
-
-std::string convert_8_3_to_normal(const std::string& name)
-{
-	std::string r = name;
-	// if r is not 11 characters long, resize and optionally pad with spaces
-	if (r.size() != 11)
-		r.resize(11, ' ');
-
-	std::string result;
-	result.reserve(11);
-
-	auto it = r.begin();
-	const auto end = r.end();
-
-	// copy the first 8 characters
-	for (int i = 0; i < 8 && it != end; ++i, ++it)
-		result += *it;
-
-	// remove trailing spaces
-	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
-
-	// if there is an extension, add a dot
-	if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
-		result += '.';
-
-	// copy the extension
-	for (int i = 0; i < 3 && it != end; ++i, ++it)
-		result += *it;
-
-	// remove trailing spaces
-	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
-
-	return result;
+	std::string convert_normal_to_8_3(const std::string& name);
+	std::string convert_8_3_to_normal(const std::string& name);
 }
 
 fat::driver::driver(std::string_view path) : m_bpb()
@@ -289,4 +227,75 @@ fat::type fat::driver::type() const
 		return type::fat16;
 
 	return type::fat32;
+}
+
+namespace
+{
+	std::string convert_normal_to_8_3(const std::string& name)
+	{
+		std::string result;
+		result.reserve(11);
+
+		auto it = name.begin();
+		const auto end = name.end();
+
+		// Copy the first 8 characters or up to the first dot
+		for (int i = 0; i < 8 && it != end && *it != '.'; ++i, ++it)
+			result += *it;
+
+		// pad with spaces
+		for (auto i = result.size(); i < 8; ++i)
+			result += ' ';
+
+		// skip dot
+		if (*it == '.')
+			++it;
+
+		// copy the extension
+		for (int i = 0; i < 3 && it != end; ++i, ++it)
+			result += *it;
+
+		// pad with spaces
+		for (auto i = result.size(); i < 11; ++i)
+			result += ' ';
+
+		// uppercase
+		std::transform(result.begin(), result.end(), result.begin(), toupper);
+
+		return result;
+	}
+
+	std::string convert_8_3_to_normal(const std::string& name)
+	{
+		std::string r = name;
+		// if r is not 11 characters long, resize and optionally pad with spaces
+		if (r.size() != 11)
+			r.resize(11, ' ');
+
+		std::string result;
+		result.reserve(11);
+
+		auto it = r.begin();
+		const auto end = r.end();
+
+		// copy the first 8 characters
+		for (int i = 0; i < 8 && it != end; ++i, ++it)
+			result += *it;
+
+		// remove trailing spaces
+		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
+
+		// if there is an extension, add a dot
+		if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
+			result += '.';
+
+		// copy the extension
+		for (int i = 0; i < 3 && it != end; ++i, ++it)
+			result += *it;
+
+		// remove trailing spaces
+		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(), result.end());
+
+		return result;
+	}
 }
