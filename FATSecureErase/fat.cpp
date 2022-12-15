@@ -96,7 +96,7 @@ std::vector<std::byte> fat::driver::read_fat()
 	return fat;
 }
 
-std::basic_string<std::byte> fat::driver::read_file_internal(std::string_view path, bool is_directory)
+std::basic_string<std::byte> fat::driver::read_file_internal(const std::string_view path, bool is_directory)
 {
 	using binary_string = std::basic_string<std::byte>;
 
@@ -248,7 +248,7 @@ namespace
 			result += ' ';
 
 		// skip dot
-		if (*it == '.')
+		if (it != end && *it == '.')
 			++it;
 
 		// copy the extension
