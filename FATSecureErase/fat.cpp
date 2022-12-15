@@ -40,8 +40,8 @@ std::string convert_normal_to_8_3(const std::string& name)
 std::string convert_8_3_to_normal(const std::string& name)
 {
 	std::string r = name;
-	// if r is not 11 characters long, pad with spaces
-	if (r.size() < 11)
+	// if r is not 11 characters long, resize and optionally pad with spaces
+	if (r.size() != 11)
 		r.resize(11, ' ');
 
 	std::string result;
@@ -107,8 +107,7 @@ std::vector<fat::directory_entry> fat::driver::read_root_directory()
 
 	// obtain FAT table
 	auto tmp = read_fat();
-	const auto ptr = reinterpret_cast<uint32_t*>(tmp.data());
-	const auto fat = std::vector(ptr, ptr + tmp.size() / sizeof(uint32_t));
+	const auto fat = reinterpret_cast<uint32_t*>(tmp.data());
 
 	std::vector<directory_entry> root_directory{};
 
