@@ -7,6 +7,7 @@ namespace
 {
 	std::string convert_normal_to_8_3(const std::string& name);
 	std::string convert_8_3_to_normal(const std::string& name);
+	std::string trim_string(const std::string& str);
 }
 
 fat::driver::driver(std::string_view path) : m_bpb()
@@ -98,6 +99,10 @@ std::vector<std::byte> fat::driver::read_fat()
 
 std::vector<fat::directory_entry> fat::driver::read_directory(const std::string_view path)
 {
+	// if root path is given then return root directory
+	if (trim_string(path.data()) == "\\")
+		return read_root_directory();
+
 	auto contents = read_file_internal(path, true);
 
 	const auto ptr = contents.data();
@@ -116,13 +121,16 @@ std::vector<fat::directory_entry> fat::driver::read_directory(const std::string_
 	return dir;
 }
 
-std::basic_string<std::byte> fat::driver::read_file(const std::string_view path)
+std::vector<std::byte> fat::driver::read_file(const std::string_view path)
 {
 	return read_file_internal(path, false);
 }
 
-std::basic_string<std::byte> fat::driver::read_file_internal(const std::string_view path, bool is_directory)
+std::vector<std::byte> fat::driver::read_file_internal(const std::string_view path, bool is_directory)
 {
+	if (trim_string(path.data()).empty())
+		throw std::runtime_error{"path is empty"};
+
 	const std::string lpath{path};
 	std::string tmp;
 
@@ -131,9 +139,15 @@ std::basic_string<std::byte> fat::driver::read_file_internal(const std::string_v
 
 	// split on backslash
 	while (std::getline(ss, tmp, '\\'))
-		path_components.emplace_back(convert_normal_to_8_3(tmp));
+		path_components.emplace_back(convert_normal_to_8_3(trim_string(tmp)));
 
-	std::basic_string<std::byte> contents{};
+	path_components.erase(std::remove_if(path_components.begin(), path_components.end(), [](const std::string_view x)
+		{
+			return trim_string(x.data()).empty();
+		}), path_components.end());
+	path_components.shrink_to_fit();
+
+	std::vector<std::byte> contents{};
 
 	auto parent = read_root_directory();
 
@@ -322,6 +336,14 @@ namespace
 		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(),
 		             result.end());
 
+		return result;
+	}
+
+	std::string trim_string(const std::string& str)
+	{
+		std::string result = str;
+		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c) { return c != ' '; }).base(),
+			result.end());
 		return result;
 	}
 }

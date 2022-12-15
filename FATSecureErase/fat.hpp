@@ -107,11 +107,10 @@ namespace fat
 	public:
 		explicit driver(std::string_view path);
 
-		std::vector<directory_entry> read_root_directory();
 		std::vector<std::byte> read_fat();
 		
 		std::vector<directory_entry> read_directory(std::string_view path);
-		std::basic_string<std::byte> read_file(std::string_view path);
+		std::vector<std::byte> read_file(std::string_view path);
 
 		type type() const;
 
@@ -119,6 +118,7 @@ namespace fat
 		std::ifstream m_ifs;
 		bpb m_bpb;
 
-		std::basic_string<std::byte> read_file_internal(std::string_view path, bool is_directory);
+		std::vector<std::byte> read_file_internal(std::string_view path, bool is_directory);
+		std::vector<directory_entry> read_root_directory();
 	};
 }
