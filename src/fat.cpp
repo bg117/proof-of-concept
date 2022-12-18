@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <sstream>
 #include <cstring>
+#include <unordered_set>
 
 namespace
 {
@@ -155,7 +156,7 @@ std::vector<std::byte> fat::driver::read_file_internal(const std::string_view pa
 
 	auto parent = read_root_directory();
 
-	for (size_t i = 0; i < path_components.size(); i++)
+	for (size_t i = 0; i < path_components.size(); ++i)
 	{
 		auto& x = path_components[i];
 
@@ -262,6 +263,66 @@ fat::type fat::driver::fat_type() const
 		return type::fat16;
 
 	return type::fat32;
+}
+
+uint32_t fat::driver::get_first_missing_cluster()
+{
+	std::unordered_set<uint32_t> clusters{};
+	auto fat = read_fat();
+	const auto fsver = fat_type();
+	const auto root_cluster = m_bpb.offset_36.fat32.root_cluster;
+
+	// add clusters that are used already
+	if (fsver == type::fat12)
+	{
+		// if FAT12, do the weird stuff
+		for (size_t i = 0; i < fat.size() / 3 * 2; ++i)
+		{
+			uint32_t cluster = reinterpret_cast<uint16_t*>(fat.data())[i];
+			cluster = cluster / 2 + cluster;
+
+			if (cluster % 2 == 0)
+				cluster &= 0xFFF;
+			else
+				cluster >>= 4;
+
+			if (cluster != 0 && cluster < 0xFF7)
+				clusters.insert(i);
+		}
+	}
+	// FAT16 and FAT32 are very straightforward
+	else if (fsver == type::fat16)
+	{
+		auto tmp = reinterpret_cast<uint16_t*>(fat.data());
+		for (size_t i = 0; i < fat.size() / sizeof *tmp; ++i)
+		{
+			uint32_t cluster = tmp[i];
+			if (cluster != 0 && cluster < 0xFFF7)
+				clusters.insert(i);
+		}
+	}
+	else
+	{
+		// also insert root directory first cluster
+		clusters.insert(root_cluster);
+
+		auto tmp = reinterpret_cast<uint32_t*>(fat.data());
+		for (size_t i = 0; i < fat.size() / sizeof *tmp; ++i)
+		{
+			uint32_t cluster = tmp[i];
+			if (cluster != 0 && cluster < 0x0FFFFFF7)
+				clusters.insert(i);
+		}
+	}
+
+	// find the first missing cluster
+	for (uint32_t i = 2; i < std::numeric_limits<uint32_t>::max(); ++i)
+	{
+		if (clusters.find(i) == clusters.end())
+			return i;
+	}
+
+	return 0; // 0 is an invalid cluster
 }
 
 namespace

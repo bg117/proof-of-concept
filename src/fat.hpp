@@ -120,5 +120,7 @@ namespace fat
 
 		std::vector<std::byte> read_file_internal(std::string_view path, bool is_directory);
 		std::vector<directory_entry> read_root_directory();
+
+		uint32_t get_first_missing_cluster();
 	};
 }
