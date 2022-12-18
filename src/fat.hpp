@@ -112,7 +112,7 @@ namespace fat
 		std::vector<directory_entry> read_directory(std::string_view path);
 		std::vector<std::byte> read_file(std::string_view path);
 
-		type type() const;
+		type fat_type() const;
 
 	private:
 		std::ifstream m_ifs;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <cstring>
 
 namespace
 {
@@ -15,6 +16,9 @@ fat::driver::driver(std::string_view path) : m_bpb()
 	std::ifstream ifs{path.data(), std::ios::binary};
 	m_ifs = std::move(ifs);
 
+	if (!m_ifs.is_open())
+		throw std::runtime_error{"failed to open file " + std::string{path}};
+
 	// copy BPB to struct
 	m_ifs.seekg(0);
 	m_ifs.read(reinterpret_cast<char*>(&m_bpb), sizeof m_bpb);
@@ -24,7 +28,7 @@ std::vector<fat::directory_entry> fat::driver::read_root_directory()
 {
 	size_t sectors_per_fat = m_bpb.sectors_per_fat_16;
 
-	if (type() != type::fat32)
+	if (fat_type() != type::fat32)
 	{
 		const size_t start_of_root_directory = m_bpb.reserved_sectors + m_bpb.number_of_fats * sectors_per_fat;
 
@@ -164,18 +168,11 @@ std::vector<std::byte> fat::driver::read_file_internal(const std::string_view pa
 
 			                          // if there are more path components then this one must be a directory
 			                          // otherwise, if is_directory is true then this one must be a directory, else a file
-			                          return v1 && v2 && (i != path_components.size() - 1
-				                                              ? y.attributes & static_cast<int>(
-					                                              directory_entry_attribute::directory)
-				                                              : (is_directory
-					                                                 ? y.attributes & static_cast<int>(
-						                                                 directory_entry_attribute::directory)
-					                                                 : !(y.attributes & static_cast<int>(
-						                                                 directory_entry_attribute::directory))));
+			                          return v1 && v2;
 		                          });
 
 		if (entry == parent.end())
-			throw std::runtime_error{"file '" + convert_8_3_to_normal(x) + "' not found"};
+			throw std::runtime_error{"file/directory '" + convert_8_3_to_normal(x) + "' not found"};
 
 		// if entry is file and there are more path components then throw exception
 		if (i != path_components.size() - 1 && !(entry->attributes & static_cast<int>(
@@ -193,7 +190,7 @@ std::vector<std::byte> fat::driver::read_file_internal(const std::string_view pa
 		const size_t start_of_data_region = start_of_root_directory + m_bpb.root_dir_entries;
 		const size_t bytes_per_cluster = m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector;
 
-		const auto fsver = type();
+		const auto fsver = fat_type();
 
 		auto fat = read_fat();
 
@@ -241,7 +238,7 @@ std::vector<std::byte> fat::driver::read_file_internal(const std::string_view pa
 	return contents;
 }
 
-fat::type fat::driver::type() const
+fat::type fat::driver::fat_type() const
 {
 	const size_t sectors_per_fat = m_bpb.sectors_per_fat_16 == 0
 		                               ? m_bpb.offset_36.fat32.sectors_per_fat_32
