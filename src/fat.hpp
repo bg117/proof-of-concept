@@ -4,46 +4,13 @@
 #include <vector>
 #include <fstream>
 
-namespace fat
+namespace poc
 {
 #pragma region POD structures
 
 #pragma pack(push, 1)
 
-	struct fat12_16_ebr
-	{
-		uint8_t drive_number;
-		uint8_t reserved;
-		uint8_t boot_signature;
-		uint32_t volume_id;
-		char volume_label[11];
-		char file_system_type[8];
-	};
-
-	struct fat32_ebr
-	{
-		uint32_t sectors_per_fat_32;
-		uint16_t extended_flags;
-		uint16_t fs_version;
-		uint32_t root_cluster;
-		uint16_t fs_info;
-		uint16_t backup_boot_sector;
-		uint8_t zero[12];
-		uint8_t drive_number;
-		uint8_t reserved;
-		uint8_t boot_signature;
-		uint32_t volume_id;
-		char volume_label[11];
-		char file_system_type[8];
-	};
-
-	union struct_at_offset_36
-	{
-		fat12_16_ebr fat12_16;
-		fat32_ebr fat32;
-	};
-
-	struct bpb
+	struct bios_parameter_block
 	{
 		uint8_t jmp[3];
 		char oem_name[8];
@@ -60,7 +27,35 @@ namespace fat
 		uint32_t number_of_hidden_sectors;
 		uint32_t total_sectors_32;
 
-		struct_at_offset_36 offset_36;
+		union
+		{
+			struct
+			{
+				uint8_t drive_number;
+				uint8_t reserved;
+				uint8_t boot_signature;
+				uint32_t volume_id;
+				char volume_label[11];
+				char file_system_type[8];
+			} fat12_16;
+
+			struct
+			{
+				uint32_t sectors_per_fat_32;
+				uint16_t extended_flags;
+				uint16_t fs_version;
+				uint32_t root_cluster;
+				uint16_t fs_info;
+				uint16_t backup_boot_sector;
+				uint8_t zero[12];
+				uint8_t drive_number;
+				uint8_t reserved;
+				uint8_t boot_signature;
+				uint32_t volume_id;
+				char volume_label[11];
+				char file_system_type[8];
+			} fat32;
+		} offset_36;
 	};
 
 	struct directory_entry
@@ -84,7 +79,7 @@ namespace fat
 
 #pragma endregion
 
-	enum class type
+	enum class version
 	{
 		fat12,
 		fat16,
@@ -102,24 +97,27 @@ namespace fat
 		long_name = read_only | hidden | system | volume_id
 	};
 
-	class driver
+	class file_allocation_table
 	{
+		using binary_type = std::vector<std::byte>;
+		using directory_type = std::vector<directory_entry>;
+
 	public:
-		explicit driver(std::string_view path);
+		explicit file_allocation_table(std::string_view path);
 
-		std::vector<std::byte> read_fat();
-		
-		std::vector<directory_entry> read_directory(std::string_view path);
-		std::vector<std::byte> read_file(std::string_view path);
+		binary_type read_fat();
 
-		type fat_type() const;
+		directory_type read_directory(std::string_view path);
+		binary_type read_file(std::string_view path);
+
+		version file_system_version() const;
 
 	private:
 		std::ifstream m_ifs;
-		bpb m_bpb;
+		bios_parameter_block m_bpb;
 
-		std::vector<std::byte> read_file_internal(std::string_view path, bool is_directory);
-		std::vector<directory_entry> read_root_directory();
+		binary_type read_file_internal(std::string_view path, bool is_directory);
+		directory_type read_root_directory();
 
 		uint32_t get_first_missing_cluster();
 	};
