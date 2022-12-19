@@ -207,10 +207,12 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_file_in
 
 			if (fsver == version::fat12)
 			{
-				cluster = reinterpret_cast<std::uint16_t *>(fat.data())[cluster];
-				cluster = cluster / 2 + cluster;
+				auto orig = cluster;
 
-				if (cluster % 2 == 0)
+				cluster = cluster * 3 / 2;
+				cluster = *reinterpret_cast<std::uint16_t *>(reinterpret_cast<std::uint8_t *>(fat.data()) + cluster); // basically, get 2 bytes from location of FAT + cluster (no pointer arithmetic)
+
+				if (orig % 2 == 0)
 					cluster &= 0xFFF;
 				else
 					cluster >>= 4;
@@ -271,10 +273,12 @@ std::uint32_t poc::file_allocation_table::get_first_missing_cluster()
 		// if FAT12, do the weird stuff
 		for (std::size_t i = 0; i < fat.size() / 3 * 2; ++i)
 		{
-			std::uint32_t cluster = reinterpret_cast<std::uint16_t *>(fat.data())[i];
-			cluster = cluster / 2 + cluster;
+			auto orig = i;
 
-			if (cluster % 2 == 0)
+			std::uint32_t cluster = i * 3 / 2;
+			cluster = *reinterpret_cast<std::uint16_t *>(reinterpret_cast<std::uint8_t *>(fat.data()) + cluster);
+
+			if (orig % 2 == 0)
 				cluster &= 0xFFF;
 			else
 				cluster >>= 4;
