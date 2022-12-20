@@ -208,7 +208,7 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
                                  8) == 0;
                 const bool v2 =
                     std::strncmp(x.data() + 8,
-                                 reinterpret_cast<const char *>(y.name),
+                                 reinterpret_cast<const char *>(y.extension),
                                  3) == 0;
 
                 // if there are more path components then this one must be a
