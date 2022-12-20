@@ -73,29 +73,22 @@ namespace poc
 		uint16_t last_modification_date;
 		uint16_t first_cluster_low;
 		uint32_t file_size;
+
+		enum class attribute
+		{
+			read_only = 0x01,
+			hidden = 0x02,
+			system = 0x04,
+			volume_id = 0x08,
+			directory = 0x10,
+			archive = 0x20,
+			long_name = read_only | hidden | system | volume_id
+		};
 	};
 
 #pragma pack(pop)
 
 #pragma endregion
-
-	enum class version
-	{
-		fat12,
-		fat16,
-		fat32
-	};
-
-	enum class directory_entry_attribute
-	{
-		read_only = 0x01,
-		hidden = 0x02,
-		system = 0x04,
-		volume_id = 0x08,
-		directory = 0x10,
-		archive = 0x20,
-		long_name = read_only | hidden | system | volume_id
-	};
 
 	class file_allocation_table
 	{
@@ -103,6 +96,13 @@ namespace poc
 		using directory_type = std::vector<directory_entry>;
 
 	public:
+		enum class version
+		{
+			fat12,
+			fat16,
+			fat32
+		};
+
 		explicit file_allocation_table(std::string_view path);
 
 		binary_type read_fat();

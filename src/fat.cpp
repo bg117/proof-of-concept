@@ -173,7 +173,7 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_file_in
 
 		// if entry is file and there are more path components then throw exception
 		if (i != path_components.size() - 1 && !(entry->attributes & static_cast<int>(
-																		 directory_entry_attribute::directory)))
+																		 directory_entry::attribute::directory)))
 		{
 			throw std::runtime_error{
 				"file '" + convert_8_3_to_normal(x) + "' is not a directory, trying to browse contents of it"};
@@ -234,7 +234,7 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_file_in
 	return contents;
 }
 
-poc::version poc::file_allocation_table::file_system_version() const
+poc::file_allocation_table::version poc::file_allocation_table::file_system_version() const
 {
 	const std::size_t sectors_per_fat = m_bpb.sectors_per_fat_16 == 0
 											? m_bpb.offset_36.fat32.sectors_per_fat_32
