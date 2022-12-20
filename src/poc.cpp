@@ -1,6 +1,7 @@
 #include "poc.hpp"
 
 #include <algorithm>
+#include <bits/stdint-uintn.h>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -17,15 +18,17 @@ std::string trim_string(const std::string &str);
 poc::file_allocation_table::file_allocation_table(std::string_view path)
     : m_bpb()
 {
-    std::ifstream ifs{path.data(), std::ios::binary};
-    m_ifs = std::move(ifs);
+    std::fstream fs;
+    fs.open(path.data(), std::ios::binary | std::ios::in | std::ios::out);
 
-    if (!m_ifs.is_open())
+    m_fs = std::move(fs);
+
+    if (!m_fs.is_open())
         throw std::runtime_error{"failed to open file " + std::string{path}};
 
     // copy BPB to struct
-    m_ifs.seekg(0);
-    m_ifs.read(reinterpret_cast<char *>(&m_bpb), sizeof m_bpb);
+    m_fs.seekg(0);
+    m_fs.read(reinterpret_cast<char *>(&m_bpb), sizeof m_bpb);
 }
 
 std::vector<poc::directory_entry>
@@ -48,10 +51,9 @@ poc::file_allocation_table::read_root_directory()
         root_directory =
             directory_type(sizeof(directory_entry) * m_bpb.root_dir_entries);
 
-        m_ifs.seekg(start_of_root_directory * m_bpb.bytes_per_sector,
-                    std::ios::beg);
-        m_ifs.read(reinterpret_cast<char *>(root_directory.data()),
-                   sizeof(directory_entry) * m_bpb.root_dir_entries);
+        m_fs.seekg(start_of_root_directory * m_bpb.bytes_per_sector);
+        m_fs.read(reinterpret_cast<char *>(root_directory.data()),
+                  sizeof(directory_entry) * m_bpb.root_dir_entries);
     }
     else
     {
@@ -73,17 +75,16 @@ poc::file_allocation_table::read_root_directory()
         do
         {
             // seek to position of cluster in disk
-            m_ifs.seekg((start_of_root_directory +
-                         (index - 2) * m_bpb.sectors_per_cluster) *
-                            m_bpb.bytes_per_sector,
-                        std::ios::beg);
+            m_fs.seekg((start_of_root_directory +
+                        (index - 2) * m_bpb.sectors_per_cluster) *
+                       m_bpb.bytes_per_sector);
 
             root_directory.resize(reserve += entries_per_cluster);
 
             // read cluster
-            m_ifs.read(reinterpret_cast<char *>(root_directory.data() +
-                                                reserve - entries_per_cluster),
-                       sizeof(directory_entry) * entries_per_cluster);
+            m_fs.read(reinterpret_cast<char *>(root_directory.data() + reserve -
+                                               entries_per_cluster),
+                      sizeof(directory_entry) * entries_per_cluster);
 
             // get next cluster index
             index = ptr32[index];
@@ -117,8 +118,8 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_fat()
 
     binary_type fat(fat_bytes);
 
-    m_ifs.seekg(m_bpb.reserved_sectors * m_bpb.bytes_per_sector, std::ios::beg);
-    m_ifs.read(reinterpret_cast<char *>(fat.data()), fat_bytes);
+    m_fs.seekg(m_bpb.reserved_sectors * m_bpb.bytes_per_sector);
+    m_fs.read(reinterpret_cast<char *>(fat.data()), fat_bytes);
 
     return fat;
 }
@@ -177,8 +178,10 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
 
     // split on backslash
     while (std::getline(ss, tmp, '\\'))
+    {
         path_components.emplace_back(
             miscellaneous::convert_normal_to_8_3(trim_string(tmp)));
+    }
 
     path_components.erase(
         std::remove_if(path_components.begin(),
@@ -214,17 +217,27 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
                 // if there are more path components then this one must be a
                 // directory otherwise, if is_directory is true then this one
                 // must be a directory, else a file
+                if (is_directory)
+                {
+                    return v1 && v2 &&
+                           (y.attributes &
+                            static_cast<int>(
+                                directory_entry::attribute::directory));
+                }
+
                 return v1 && v2;
             });
 
         if (entry == parent.end())
+        {
             throw std::runtime_error{"file/directory '" +
                                      miscellaneous::convert_8_3_to_normal(x) +
                                      "' not found"};
+        }
 
         // if entry is file and there are more path components then throw
         // exception
-        if (i != path_components.size() - 1 &&
+        if (i < path_components.size() - 1 &&
             !(entry->attributes &
               static_cast<int>(directory_entry::attribute::directory)))
         {
@@ -241,7 +254,9 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
         const std::size_t start_of_root_directory =
             m_bpb.reserved_sectors + m_bpb.number_of_fats * sectors_per_fat;
         const std::size_t start_of_data_region =
-            start_of_root_directory + m_bpb.root_dir_entries;
+            start_of_root_directory + m_bpb.root_dir_entries *
+                                          sizeof(directory_entry) /
+                                          m_bpb.bytes_per_sector;
         const std::size_t bytes_per_cluster =
             m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector;
 
@@ -254,17 +269,16 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
         do
         {
             // seek to position of cluster in disk
-            m_ifs.seekg((start_of_data_region +
-                         (cluster - 2) * m_bpb.sectors_per_cluster) *
-                            m_bpb.bytes_per_sector,
-                        std::ios::beg);
+            m_fs.seekg((start_of_data_region +
+                        (cluster - 2) * m_bpb.sectors_per_cluster) *
+                       m_bpb.bytes_per_sector);
 
             contents.resize(reserve += bytes_per_cluster);
 
             // read cluster
-            m_ifs.read(reinterpret_cast<char *>(contents.data() + reserve -
-                                                bytes_per_cluster),
-                       bytes_per_cluster);
+            m_fs.read(reinterpret_cast<char *>(contents.data() + reserve -
+                                               bytes_per_cluster),
+                      bytes_per_cluster);
 
             if (fsver == version::fat12)
             {
@@ -305,8 +319,10 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
             parent = std::vector(arr, arr + len);
         }
 
-        // resize contents to actual size
-        contents = {contents.data(), contents.data() + entry->file_size};
+        // resize contents to actual size IF it is a file AND ONLY IF it is a
+        // file
+        if (!is_directory || i < path_components.size() - 1)
+            contents = {contents.data(), contents.data() + entry->file_size};
     }
 
     return contents;
@@ -374,8 +390,10 @@ void poc::file_allocation_table::write_file(std::string_view path,
 
     // split on backslash
     while (std::getline(ss, tmp, '\\'))
+    {
         path_components.emplace_back(
             miscellaneous::convert_normal_to_8_3(trim_string(tmp)));
+    }
 
     path_components.erase(
         std::remove_if(path_components.begin(),
@@ -405,7 +423,9 @@ void poc::file_allocation_table::write_file(std::string_view path,
     const std::size_t start_of_root_directory =
         m_bpb.reserved_sectors + m_bpb.number_of_fats * sectors_per_fat;
     const std::size_t start_of_data_region =
-        start_of_root_directory + m_bpb.root_dir_entries;
+        start_of_root_directory + m_bpb.root_dir_entries *
+                                      sizeof(directory_entry) /
+                                      m_bpb.bytes_per_sector;
     const std::size_t bytes_per_cluster =
         m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector;
 
@@ -418,7 +438,7 @@ void poc::file_allocation_table::write_file(std::string_view path,
 
     binary_type fat = read_fat();
 
-    std::uint32_t next = get_first_missing_cluster(fat);
+    std::uint32_t next = get_next_free_cluster(fat);
 
     directory_entry::date date;
     directory_entry::time time;
@@ -456,10 +476,121 @@ void poc::file_allocation_table::write_file(std::string_view path,
     entry.last_modification_date = date;
     entry.first_cluster_low      = next & 0xFFFF; // low 16 bits
     entry.file_size              = data.size();
+
+    const std::size_t data_size_in_bytes_rounded =
+        (data.size() + bytes_per_cluster - 1) / bytes_per_cluster *
+        bytes_per_cluster;
+    const std::size_t data_size_in_clusters =
+        data_size_in_bytes_rounded / bytes_per_cluster;
+
+    std::vector<std::vector<std::byte>> cluster_division{}; // data divided into
+                                                            // clusters
+    cluster_division.reserve(data_size_in_clusters);
+
+    for (std::size_t i = 0; i < data_size_in_clusters; i++)
+    {
+        std::vector<std::byte> cluster{};
+        cluster.reserve(bytes_per_cluster);
+
+        for (std::size_t j = 0; j < bytes_per_cluster; j++)
+        {
+            // copy normally until we run out of data, then we pad with 0s
+            if (i * bytes_per_cluster + j < data.size())
+                cluster.emplace_back(data[i * bytes_per_cluster + j]);
+            else
+                cluster.emplace_back(std::byte{0});
+        }
+
+        cluster_division.emplace_back(cluster);
+    }
+
+    // write FAT clusters
+    std::vector<uint32_t> saved_clusters{};
+    saved_clusters.reserve(data_size_in_clusters);
+
+    uint32_t end_of_chain_marker;
+    switch (fsver)
+    {
+    case version::fat12: end_of_chain_marker = 0x0FFF; break;
+    case version::fat16: end_of_chain_marker = 0xFFFF; break;
+    case version::fat32: end_of_chain_marker = 0x0FFFFFFF; break;
+    }
+
+    // write clusters to buffer
+    for (std::size_t i = 0; i < data_size_in_clusters; i++)
+    {
+        std::uint32_t current = next;
+        next                  = i < data_size_in_clusters - 1
+                                    ? get_next_free_cluster(fat, current)
+                                    : end_of_chain_marker;
+
+        switch (fsver)
+        {
+        case version::fat12:
+        {
+            std::size_t cluster = current * 3 / 2;
+            uint8_t *   ptr8    = reinterpret_cast<uint8_t *>(fat.data());
+            uint16_t *  cluster_ptr =
+                reinterpret_cast<uint16_t *>(ptr8 + cluster);
+
+            if (current % 2 == 0)
+                *cluster_ptr |= next & 0x0FFF; // store in low 12 bits if even
+            else
+                *cluster_ptr |= next << 4; // else, store in high 12 bits
+        }
+        break;
+        case version::fat16:
+        {
+            std::size_t cluster                               = current;
+            reinterpret_cast<uint16_t *>(fat.data())[cluster] = next;
+        }
+        break;
+        case version::fat32:
+        {
+            std::size_t cluster                               = current;
+            reinterpret_cast<uint32_t *>(fat.data())[cluster] = next;
+        }
+        break;
+        }
+
+        saved_clusters.emplace_back(current);
+    }
+
+    parent.emplace_back(entry);
+
+    // get cluster of self
+    std::uint32_t self_cluster =
+        parent[0].first_cluster_low |
+        (parent[0].first_cluster_high << 16); // first entry is always . (self)
+
+    // write directory
+    m_fs.seekp((start_of_data_region +
+                (self_cluster - 2) * m_bpb.sectors_per_cluster) *
+               m_bpb.bytes_per_sector);
+    m_fs.write(reinterpret_cast<const char *>(parent.data()),
+               parent.size() * sizeof(directory_entry));
+
+    // write FAT
+    m_fs.seekp(m_bpb.reserved_sectors * m_bpb.bytes_per_sector);
+    m_fs.write(reinterpret_cast<const char *>(fat.data()), fat.size());
+
+    // write data
+    int i = 0;
+    for (const auto &cluster : saved_clusters)
+    {
+        m_fs.seekp(
+            (start_of_data_region + (cluster - 2) * m_bpb.sectors_per_cluster) *
+            m_bpb.bytes_per_sector);
+        m_fs.write(reinterpret_cast<const char *>(cluster_division[i].data()),
+                   bytes_per_cluster);
+
+        i++;
+    }
 }
 
 std::uint32_t
-poc::file_allocation_table::get_first_missing_cluster(const binary_type &fat)
+poc::file_allocation_table::get_next_free_cluster(const binary_type &fat,
+                                                  uint32_t start_cluster)
 {
     const version fsver = file_system_version();
 
@@ -467,7 +598,7 @@ poc::file_allocation_table::get_first_missing_cluster(const binary_type &fat)
     {
     case version::fat12:
     {
-        for (std::size_t i = 2; i < fat.size() * 2 / 3; i++)
+        for (std::size_t i = start_cluster + 1; i < fat.size() * 2 / 3; i++)
         {
             auto        orig    = i;
             std::size_t cluster = i * 3 / 2;
@@ -486,7 +617,9 @@ poc::file_allocation_table::get_first_missing_cluster(const binary_type &fat)
     break;
     case version::fat16:
     {
-        for (std::size_t i = 2; i < fat.size() / 2 /* sizeof(uint16_t) */; i++)
+        for (std::size_t i = start_cluster + 1;
+             i < fat.size() / 2 /* sizeof(uint16_t) */;
+             i++)
         {
             std::uint16_t cluster =
                 reinterpret_cast<const uint16_t *>(fat.data())[i];
@@ -498,7 +631,9 @@ poc::file_allocation_table::get_first_missing_cluster(const binary_type &fat)
     break;
     default /* FAT32 */:
     {
-        for (std::size_t i = 2; i < fat.size() / 4 /* sizeof(uint32_t) */; i++)
+        for (std::size_t i = start_cluster + 1;
+             i < fat.size() / 4 /* sizeof(uint32_t) */;
+             i++)
         {
             std::uint32_t cluster =
                 reinterpret_cast<const uint32_t *>(fat.data())[i];
