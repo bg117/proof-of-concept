@@ -138,7 +138,7 @@ class file_allocation_table
 
     binary_type read_file_internal(std::string_view path, bool is_directory);
 
-    uint32_t get_first_missing_cluster();
+    uint32_t get_first_missing_cluster(const binary_type &fat);
 };
 
 class miscellaneous

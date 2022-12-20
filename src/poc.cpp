@@ -87,8 +87,8 @@ poc::file_allocation_table::read_root_directory()
 
             // get next cluster index
             index = ptr32[index];
-        } while (index < 0x0FFFFFF7);
-        // indices greater than 0x0FFFFFF6 are either damaged or indicates the
+        } while (index < 0x0FFFFFF0);
+        // indices greater than 0x0FFFFFF0 are either damaged or indicates the
         // last cluster in the chain
     }
 
@@ -291,9 +291,9 @@ poc::file_allocation_table::read_file_internal(const std::string_view path,
                 cluster =
                     reinterpret_cast<std::uint32_t *>(fat.data())[cluster];
             }
-        } while ((fsver == version::fat12 && cluster < 0xFF7) ||
-                 (fsver == version::fat16 && cluster < 0xFFF7) ||
-                 (fsver == version::fat32 && cluster < 0x0FFFFFF7));
+        } while ((fsver == version::fat12 && cluster < 0xFF0) ||
+                 (fsver == version::fat16 && cluster < 0xFFF0) ||
+                 (fsver == version::fat32 && cluster < 0x0FFFFFF0));
 
         // if there are more path components then set parent to contents
         if (i != path_components.size() - 1)
@@ -349,22 +349,22 @@ void poc::file_allocation_table::write_file(std::string_view path,
     if (trim_string(path.data()).empty())
         throw std::runtime_error{"path is empty"};
 
-    bool exists = true;
-    try
-    {
-        read_file(path);
-    }
-    catch (const std::runtime_error &)
-    {
-        exists = false;
-    }
+    // bool exists = true;
+    // try
+    // {
+    //     read_file(path);
+    // }
+    // catch (...)
+    // {
+    //     exists = false;
+    // }
 
-    if (exists)
-    {
-        throw std::runtime_error{
-            "file " + std::string{path} +
-            " already exists"}; // easy way out; we'll fix this later
-    }
+    // if (exists)
+    // {
+    //     throw std::runtime_error{
+    //         "file " + std::string{path} +
+    //         " already exists"}; // easy way out; we'll fix this later
+    // }
 
     const std::string lpath{path};
     std::string       tmp;
@@ -388,10 +388,13 @@ void poc::file_allocation_table::write_file(std::string_view path,
 
     // get parent directory
     std::ostringstream oss{};
-    std::copy(path_components.begin(),
-              path_components.end() - 1,
-              std::ostream_iterator<std::string>(oss, "\\"));
-    const std::string parent_dir = oss.str();
+    std::transform(path_components.begin(),
+                   path_components.end() - 1,
+                   std::ostream_iterator<std::string>(oss, "\\"),
+                   [](const auto &x) {
+                       return miscellaneous::convert_8_3_to_normal(x);
+                   });
+    const std::string parent_dir = "\\" + oss.str();
     directory_type    parent     = read_directory(parent_dir);
 
     const version fsver = file_system_version();
@@ -415,7 +418,7 @@ void poc::file_allocation_table::write_file(std::string_view path,
 
     binary_type fat = read_fat();
 
-    std::uint32_t next = get_first_missing_cluster();
+    std::uint32_t next = get_first_missing_cluster(fat);
 
     directory_entry::date date;
     directory_entry::time time;
@@ -455,71 +458,59 @@ void poc::file_allocation_table::write_file(std::string_view path,
     entry.file_size              = data.size();
 }
 
-std::uint32_t poc::file_allocation_table::get_first_missing_cluster()
+std::uint32_t
+poc::file_allocation_table::get_first_missing_cluster(const binary_type &fat)
 {
-    std::unordered_set<std::uint32_t> clusters{};
-    binary_type                       fat   = read_fat();
-    const version                     fsver = file_system_version();
-    const std::uint32_t root_cluster = m_bpb.offset_36.fat32.root_cluster;
+    const version fsver = file_system_version();
 
-    // add clusters that are used already
     switch (fsver)
     {
-    // if FAT12, do the weird stuff
     case version::fat12:
     {
-        for (std::size_t i = 0; i < fat.size() * 3 / 2; ++i)
+        for (std::size_t i = 2; i < fat.size() * 2 / 3; i++)
         {
-            auto orig = i;
-
-            std::uint16_t cluster = i * 3 / 2;
-            cluster               = *reinterpret_cast<std::uint16_t *>(
-                reinterpret_cast<std::uint8_t *>(fat.data()) + cluster);
+            auto        orig    = i;
+            std::size_t cluster = i * 3 / 2;
+            cluster             = *reinterpret_cast<const uint16_t *>(
+                reinterpret_cast<const std::uint8_t *>(fat.data()) + cluster);
 
             if (orig % 2 == 0)
                 cluster &= 0xFFF;
             else
                 cluster >>= 4;
 
-            if (cluster != 0 && cluster < 0xFF7)
-                clusters.insert(i);
+            if (cluster == 0)
+                return i;
         }
     }
-    // FAT16 and FAT32 are very straightforward
+    break;
     case version::fat16:
     {
-        auto tmp = reinterpret_cast<std::uint16_t *>(fat.data());
-        for (std::size_t i = 0; i < fat.size() / sizeof *tmp; ++i)
+        for (std::size_t i = 2; i < fat.size() / 2 /* sizeof(uint16_t) */; i++)
         {
-            std::uint16_t cluster = tmp[i];
-            if (cluster != 0 && cluster < 0xFFF7)
-                clusters.insert(i);
+            std::uint16_t cluster =
+                reinterpret_cast<const uint16_t *>(fat.data())[i];
+
+            if (cluster == 0)
+                return i;
         }
     }
-
-    default:
+    break;
+    default /* FAT32 */:
     {
-        // also insert root directory first cluster
-        clusters.insert(root_cluster);
-        auto tmp = reinterpret_cast<std::uint32_t *>(fat.data());
-        for (std::size_t i = 0; i < fat.size() / sizeof *tmp; ++i)
+        for (std::size_t i = 2; i < fat.size() / 4 /* sizeof(uint32_t) */; i++)
         {
-            std::uint32_t cluster = tmp[i];
-            if (cluster != 0 && cluster < 0x0FFFFFF7)
-                clusters.insert(i);
+            std::uint32_t cluster =
+                reinterpret_cast<const uint32_t *>(fat.data())[i];
+
+            if (cluster == 0)
+                return i;
         }
     }
+    break;
     }
 
-    // find the first missing cluster
-    for (std::uint32_t i = 2; i < std::numeric_limits<std::uint32_t>::max();
-         ++i)
-    {
-        if (clusters.find(i) == clusters.end())
-            return i;
-    }
-
-    return 0; // 0 is an invalid cluster
+    return 0;
 }
 
 std::string poc::miscellaneous::convert_normal_to_8_3(std::string_view name)
