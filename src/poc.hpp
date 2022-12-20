@@ -62,17 +62,31 @@ struct bios_parameter_block
 
 struct directory_entry
 {
+    struct date
+    {
+        uint8_t day   : 5;
+        uint8_t month : 4;
+        uint8_t year  : 7; // since 1980
+    };
+
+    struct time
+    {
+        uint8_t second : 5;
+        uint8_t minute : 6;
+        uint8_t hour   : 5;
+    };
+
     uint8_t  name[8];
     uint8_t  extension[3];
     uint8_t  attributes;
     uint8_t  reserved;
     uint8_t  creation_time_tenths;
-    uint16_t creation_time;
-    uint16_t creation_date;
-    uint16_t last_access_date;
+    time     creation_time;
+    date     creation_date;
+    date     last_access_date;
     uint16_t first_cluster_high;
-    uint16_t last_modification_time;
-    uint16_t last_modification_date;
+    time     last_modification_time;
+    date     last_modification_date;
     uint16_t first_cluster_low;
     uint32_t file_size;
 
@@ -110,7 +124,7 @@ class file_allocation_table
     directory_type read_directory(std::string_view path);
     binary_type    read_file(std::string_view path);
 
-	void write_file(std::string_view path, binary_type data);
+    void write_file(std::string_view path, binary_type data);
 
     version file_system_version() const;
 
@@ -118,12 +132,12 @@ class file_allocation_table
     std::ifstream        m_ifs;
     bios_parameter_block m_bpb;
 
-	binary_type read_fat();
+    binary_type read_fat();
 
     directory_type read_root_directory();
 
-    binary_type    read_file_internal(std::string_view path, bool is_directory);
-	
+    binary_type read_file_internal(std::string_view path, bool is_directory);
+
     uint32_t get_first_missing_cluster();
 };
 
