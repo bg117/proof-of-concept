@@ -1,4 +1,4 @@
-#include "fat.hpp"
+#include "poc.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -7,8 +7,6 @@
 
 namespace
 {
-	std::string convert_normal_to_8_3(const std::string &name);
-	std::string convert_8_3_to_normal(const std::string &name);
 	std::string trim_string(const std::string &str);
 }
 
@@ -102,21 +100,27 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_fat()
 
 std::vector<poc::directory_entry> poc::file_allocation_table::read_directory(const std::string_view path)
 {
+	std::vector<poc::directory_entry> dir{};
+
 	// if root path is given then return root directory
 	if (trim_string(path.data()) == "\\")
-		return read_root_directory();
+	{
+		dir = read_root_directory();
+	}
+	else
+	{
+		binary_type contents = read_file_internal(path, true);
 
-	binary_type contents = read_file_internal(path, true);
+		const std::byte *ptr = contents.data();
+		const std::size_t len = contents.size() / sizeof(directory_entry);
+		const auto arr = reinterpret_cast<const directory_entry *>(ptr);
 
-	const std::byte *ptr = contents.data();
-	const std::size_t len = contents.size() / sizeof(directory_entry);
-	const auto arr = reinterpret_cast<const directory_entry *>(ptr);
-
-	std::vector dir(arr, arr + len);
+		dir = std::vector(arr, arr + len);
+	}
 
 	// remove null entries
 	dir.erase(std::remove_if(dir.begin(), dir.end(), [](const directory_entry &x)
-							 { return x.name[0] == '\0' && x.extension[0] == '\0'; }),
+							 { return x.name[0] == '\0' || x.name[0] == 0xE5; }),
 			  dir.end());
 	dir.shrink_to_fit();
 
@@ -141,7 +145,7 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_file_in
 
 	// split on backslash
 	while (std::getline(ss, tmp, '\\'))
-		path_components.emplace_back(convert_normal_to_8_3(trim_string(tmp)));
+		path_components.emplace_back(miscellaneous::convert_normal_to_8_3(trim_string(tmp)));
 
 	path_components.erase(std::remove_if(path_components.begin(), path_components.end(), [](const std::string_view x)
 										 { return trim_string(x.data()).empty(); }),
@@ -169,14 +173,14 @@ poc::file_allocation_table::binary_type poc::file_allocation_table::read_file_in
 								  });
 
 		if (entry == parent.end())
-			throw std::runtime_error{"file/directory '" + convert_8_3_to_normal(x) + "' not found"};
+			throw std::runtime_error{"file/directory '" + miscellaneous::convert_8_3_to_normal(x) + "' not found"};
 
 		// if entry is file and there are more path components then throw exception
 		if (i != path_components.size() - 1 && !(entry->attributes & static_cast<int>(
 																		 directory_entry::attribute::directory)))
 		{
 			throw std::runtime_error{
-				"file '" + convert_8_3_to_normal(x) + "' is not a directory, trying to browse contents of it"};
+				"file '" + miscellaneous::convert_8_3_to_normal(x) + "' is not a directory, trying to browse contents of it"};
 		}
 
 		const std::size_t sectors_per_fat = m_bpb.sectors_per_fat_16 == 0
@@ -322,82 +326,82 @@ std::uint32_t poc::file_allocation_table::get_first_missing_cluster()
 	return 0; // 0 is an invalid cluster
 }
 
+std::string poc::miscellaneous::convert_normal_to_8_3(std::string_view name)
+{
+	std::string result;
+	result.reserve(11);
+
+	auto it = name.begin();
+	const auto end = name.end();
+
+	// Copy the first 8 characters or up to the first dot
+	for (int i = 0; i < 8 && it != end && *it != '.'; ++i, ++it)
+		result += *it;
+
+	// pad with spaces
+	for (std::size_t i = result.size(); i < 8; ++i)
+		result += ' ';
+
+	// skip dot
+	if (it != end && *it == '.')
+		++it;
+
+	// copy the extension
+	for (int i = 0; i < 3 && it != end; ++i, ++it)
+		result += *it;
+
+	// pad with spaces
+	for (std::size_t i = result.size(); i < 11; ++i)
+		result += ' ';
+
+	// uppercase
+	std::transform(result.begin(), result.end(), result.begin(), toupper);
+
+	return result;
+}
+
+std::string poc::miscellaneous::convert_8_3_to_normal(std::string_view name)
+{
+	std::string r = name.data();
+	// if r is not 11 characters long, resize and optionally pad with spaces
+	if (r.size() != 11)
+		r.resize(11, ' ');
+
+	std::string result;
+	result.reserve(11);
+
+	auto it = r.begin();
+	const auto end = r.end();
+
+	// copy the first 8 characters
+	for (int i = 0; i < 8 && it != end; ++i, ++it)
+		result += *it;
+
+	// remove trailing spaces
+	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c)
+							  { return c != ' '; })
+					 .base(),
+				 result.end());
+
+	// if there is an extension, add a dot
+	if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
+		result += '.';
+
+	// copy the extension
+	for (int i = 0; i < 3 && it != end; ++i, ++it)
+		result += *it;
+
+	// remove trailing spaces
+	result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c)
+							  { return c != ' '; })
+					 .base(),
+				 result.end());
+
+	return result;
+}
+
 namespace
 {
-	std::string convert_normal_to_8_3(const std::string &name)
-	{
-		std::string result;
-		result.reserve(11);
-
-		auto it = name.begin();
-		const auto end = name.end();
-
-		// Copy the first 8 characters or up to the first dot
-		for (int i = 0; i < 8 && it != end && *it != '.'; ++i, ++it)
-			result += *it;
-
-		// pad with spaces
-		for (std::size_t i = result.size(); i < 8; ++i)
-			result += ' ';
-
-		// skip dot
-		if (it != end && *it == '.')
-			++it;
-
-		// copy the extension
-		for (int i = 0; i < 3 && it != end; ++i, ++it)
-			result += *it;
-
-		// pad with spaces
-		for (std::size_t i = result.size(); i < 11; ++i)
-			result += ' ';
-
-		// uppercase
-		std::transform(result.begin(), result.end(), result.begin(), toupper);
-
-		return result;
-	}
-
-	std::string convert_8_3_to_normal(const std::string &name)
-	{
-		std::string r = name;
-		// if r is not 11 characters long, resize and optionally pad with spaces
-		if (r.size() != 11)
-			r.resize(11, ' ');
-
-		std::string result;
-		result.reserve(11);
-
-		auto it = r.begin();
-		const auto end = r.end();
-
-		// copy the first 8 characters
-		for (int i = 0; i < 8 && it != end; ++i, ++it)
-			result += *it;
-
-		// remove trailing spaces
-		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c)
-								  { return c != ' '; })
-						 .base(),
-					 result.end());
-
-		// if there is an extension, add a dot
-		if (*it != ' ' && *(it + 1) != ' ' && *(it + 2) != ' ')
-			result += '.';
-
-		// copy the extension
-		for (int i = 0; i < 3 && it != end; ++i, ++it)
-			result += *it;
-
-		// remove trailing spaces
-		result.erase(std::find_if(result.rbegin(), result.rend(), [](const char c)
-								  { return c != ' '; })
-						 .base(),
-					 result.end());
-
-		return result;
-	}
-
 	std::string trim_string(const std::string &str)
 	{
 		std::string result = str;

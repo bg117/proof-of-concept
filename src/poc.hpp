@@ -121,4 +121,11 @@ namespace poc
 
 		uint32_t get_first_missing_cluster();
 	};
+
+	class miscellaneous
+	{
+	public:
+		static std::string convert_normal_to_8_3(std::string_view name);
+		static std::string convert_8_3_to_normal(std::string_view name);
+	};
 }
