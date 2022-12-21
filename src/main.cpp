@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iterator>
 #include <string>
 
 #include "poc.hpp"
@@ -6,17 +7,17 @@
 int main(int argc, char *argv[])
 {
     std::vector<std::string> args{argv, argv + argc};
-    std::byte                sample_data[633];
+    std::byte                sample_data[768];
 
     // randomly fill sample data
-    for (int i = 0; i < 633; i++)
+    for (int i = 0; i < std::size(sample_data); i++)
         sample_data[i] = static_cast<std::byte>(rand() % 256);
 
     try
     {
         poc::file_allocation_table imp{argv[1]};
         imp.write_file("\\TEST\\bro.txt",
-                       std::vector(sample_data, sample_data + 633));
+                       std::vector(sample_data, sample_data + std::size(sample_data)));
 
         if (args[2] == "-r")
         {
@@ -29,13 +30,7 @@ int main(int argc, char *argv[])
                 imp.read_directory(args[3]);
 
             for (const auto &entry : entries)
-            {
-                std::string normal = poc::miscellaneous::convert_8_3_to_normal(
-                    std::string(reinterpret_cast<const char *>(entry.name), 8) +
-                    std::string(reinterpret_cast<const char *>(entry.extension),
-                                3));
-                std::cout << "Name: " << normal << std::endl;
-            }
+                std::cout << "Name: " << entry.name << std::endl;
         }
     }
     catch (const std::exception &e)
