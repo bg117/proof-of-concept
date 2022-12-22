@@ -105,7 +105,7 @@ poc::file_allocation_table::file_allocation_table(std::string_view path)
             // read cluster
             m_fs.read(reinterpret_cast<char *>(m_root_dir.data() + new_size -
                                                entries_per_cluster),
-                      sizeof(directory_entry) * entries_per_cluster);
+                      sizeof(_Dir_entry) * entries_per_cluster);
 
             // get next cluster index
             cluster = _Get_cluster(cluster);
@@ -362,11 +362,7 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     if (new_dir_size * new_dir_clusters <
         entries_per_cluster * new_dir_clusters)
     {
-        const std::size_t padding_size =
-            entries_per_cluster * new_dir_clusters - new_dir_size;
-
-        for (std::size_t i = 0; i < padding_size; i++)
-            parent.emplace_back(_Dir_entry{});
+        parent.resize(entries_per_cluster * new_dir_clusters);
     }
 
     int i = 0;
@@ -385,7 +381,8 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     {
         m_fs.seekp((m_first_fat_sector + i * m_sectors_per_fat) *
                    m_bpb.bytes_per_sector);
-        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(m_fat.data()), m_fat.size());
+        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(m_fat.data()),
+                   m_sectors_per_fat * m_bpb.bytes_per_sector);
     }
 
     // write data
