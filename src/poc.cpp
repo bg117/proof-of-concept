@@ -1,4 +1,5 @@
 #include "poc.hpp"
+#include "fs_errors.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -175,24 +176,23 @@ void poc::file_allocation_table::write_file(std::string_view              path,
                                             const std::vector<std::byte> &data)
 {
     if (trim_string(path.data()).empty())
-        throw std::runtime_error{"path is empty"};
+        throw errors::invalid_path_error{"path is empty"};
 
     bool exists = true;
     try
     {
         read_file(path);
     }
-    catch (const std::runtime_error &)
+    catch (const errors::file_not_found_error &)
     {
         exists = false;
     }
 
     if (exists)
     {
-        // throw std::runtime_error{
-        //     "file " + std::string{path} +
-        //     " already exists"}; // easy way out; we'll fix this later
-        return;
+        throw errors::file_already_exists_error{
+            "file " + std::string{path} +
+            " already exists"}; // easy way out; we'll fix this later
     }
 
     std::vector<std::string> path_components = convert_path_to_fat_path(path);
@@ -324,60 +324,76 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     {
         if (parent.size() > m_bpb.root_dir_entries)
         {
-            throw std::runtime_error{"maximum number of entries in root "
-                                     "directory exceeded"};
+            throw errors::file_system_error{"maximum number of entries in root "
+                                            "directory exceeded"};
         }
     }
+
+    auto p = self_cluster;
 
     // if root directory AND FAT32, get first cluster of root directory
     if (self_cluster == 0 && m_version == file_system_version::fat32)
         self_cluster = m_bpb.offset_36.fat32.root_cluster;
 
     // get sector from cluster
-    const std::size_t self_lba = self_cluster == 0
+    const std::size_t self_lba = p == 0
                                      ? m_first_root_dir_sector
                                      : _Get_sector_from_cluster(self_cluster);
 
-    std::vector<std::size_t> dir_cluster_chain =
-        _Get_cluster_chain(self_cluster);
-
-    const std::size_t entries_per_cluster =
-        m_bytes_per_cluster / sizeof(_Dir_entry);
-
-    // if we're exceeding the cluster boundary, we need to allocate a new
-    // cluster
-    if (ROUND_UP(new_dir_size, m_bytes_per_cluster) >
-        ROUND_UP(old_dir_size, m_bytes_per_cluster))
+    // only perform directory checks if either
+    //   - we're not in the root directory
+    //   - we're in the root directory and we're in a FAT32 volume
+    if (p >= 2 || (p == 0 && m_version == file_system_version::fat32))
     {
-        std::size_t new_cluster = _Get_next_free_cluster(self_cluster);
-        dir_cluster_chain.emplace_back(new_cluster);
-        _Set_cluster(self_cluster, new_cluster);
-        _Set_cluster(new_cluster, end_of_chain_marker);
-    }
+        std::vector<std::size_t> dir_cluster_chain =
+            _Get_cluster_chain(self_cluster);
 
-    const std::size_t new_dir_clusters =
-        ROUND_UP(new_dir_size, m_bytes_per_cluster) / m_bytes_per_cluster;
+        const std::size_t entries_per_cluster =
+            m_bytes_per_cluster / sizeof(_Dir_entry);
 
-    // pad directory with 0s up until the next cluster boundary
-    if (new_dir_size * new_dir_clusters <
-        entries_per_cluster * new_dir_clusters)
-    {
+        // if we're exceeding the cluster boundary, we need to allocate a new
+        // cluster
+        if (ROUND_UP(new_dir_size, m_bytes_per_cluster) >
+            ROUND_UP(old_dir_size, m_bytes_per_cluster))
+        {
+            std::size_t new_cluster = _Get_next_free_cluster(self_cluster);
+            dir_cluster_chain.emplace_back(new_cluster);
+            _Set_cluster(self_cluster, new_cluster);
+            _Set_cluster(new_cluster, end_of_chain_marker);
+        }
+
+        const std::size_t new_dir_clusters =
+            ROUND_UP(new_dir_size, m_bytes_per_cluster) / m_bytes_per_cluster;
+
+        // pad directory with 0s up until the next cluster boundary
         parent.resize(entries_per_cluster * new_dir_clusters);
-    }
 
-    int i = 0;
-    // write directory
-    for (const auto &cluster : dir_cluster_chain)
+        int i = 0;
+
+        // write directory
+        for (const auto &cluster : dir_cluster_chain)
+        {
+            m_fs.seekp(_Get_sector_from_cluster(cluster) *
+                       m_bpb.bytes_per_sector);
+            m_fs.write(FAT_STRING_TO_CHAR_ARRAY(parent.data() +
+                                                i * entries_per_cluster),
+                       m_bytes_per_cluster);
+            i++;
+        }
+    }
+    else // we're in the root directory AND we're in a non-FAT32 volume
+         // AND (thankfully) we're not exceeding the maximum number of entries
     {
-        m_fs.seekp(_Get_sector_from_cluster(cluster) * m_bpb.bytes_per_sector);
-        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(parent.data()) +
-                       i * m_bytes_per_cluster,
-                   m_bytes_per_cluster);
-        i++;
+        parent.resize(m_bpb.root_dir_entries);
+
+        // write directory
+        m_fs.seekp(self_lba * m_bpb.bytes_per_sector);
+        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(parent.data()),
+                   parent.size() * sizeof(_Dir_entry));
     }
 
     // write FAT
-    for (i = 0; i < m_bpb.number_of_fats; i++)
+    for (int i = 0; i < m_bpb.number_of_fats; i++)
     {
         m_fs.seekp((m_first_fat_sector + i * m_sectors_per_fat) *
                    m_bpb.bytes_per_sector);
@@ -386,14 +402,12 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     }
 
     // write data
-    i = 0;
-    for (const auto &cluster : saved_clusters)
+    for (int i = 0; i < saved_clusters.size(); i++)
     {
-        m_fs.seekp(_Get_sector_from_cluster(cluster) * m_bpb.bytes_per_sector);
+        m_fs.seekp(_Get_sector_from_cluster(saved_clusters[i]) *
+                   m_bpb.bytes_per_sector);
         m_fs.write(FAT_STRING_TO_CHAR_ARRAY(cluster_division[i].data()),
                    m_bytes_per_cluster);
-
-        i++;
     }
 }
 
@@ -402,7 +416,7 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
                                                 bool is_directory)
 {
     if (trim_string(path.data()).empty())
-        throw std::runtime_error{"path is empty"};
+        throw errors::invalid_path_error{"path is empty"};
 
     std::vector<std::string> path_components = convert_path_to_fat_path(path);
 
@@ -441,8 +455,16 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
 
         if (entry == parent.end())
         {
-            throw std::runtime_error{"file/directory '" +
-                                     convert_8_3_to_normal(x) + "' not found"};
+            if (i < path_components.size() - 1 || is_directory)
+            {
+                throw errors::directory_not_found_error{
+                    "directory '" + convert_8_3_to_normal(x) + "' not found"};
+            }
+            else
+            {
+                throw errors::file_not_found_error{
+                    "file '" + convert_8_3_to_normal(x) + "' not found"};
+            }
         }
 
         // if entry is file and there are more path components then
@@ -450,7 +472,7 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
         if (i < path_components.size() - 1 &&
             !(entry->attributes & static_cast<int>(_Dir_entry_attr::directory)))
         {
-            throw std::runtime_error{
+            throw errors::invalid_file_operation_error{
                 "file '" + convert_8_3_to_normal(x) +
                 "' is not a directory, trying to browse contents of it"};
         }
@@ -555,9 +577,9 @@ void poc::file_allocation_table::_Set_cluster(std::size_t cluster_number,
         auto cluster_ptr = reinterpret_cast<uint16_t *>(ptr8 + cluster);
 
         if (cluster % 2 == 0)
-            *cluster_ptr |= next & 0x0FFF; // store in low 12 bits if even
+            *cluster_ptr |= next << 4; // if even, store in high 12 bits
         else
-            *cluster_ptr |= next << 4; // else, store in high 12 bits
+            *cluster_ptr |= next & 0x0FFF; // else, store in low 12 bits
     }
     break;
     case file_system_version::fat16:
@@ -718,18 +740,6 @@ poc::file_allocation_table::convert_normal_to_8_3(std::string_view name)
     std::string r = name.data();
     std::string result;
     result.reserve(11);
-
-    // resize components such that the part before the dot is at most 8
-    // characters and the part after the dot is at most 3 characters
-    auto        dot_pos = r.find('.');
-    std::string np      = r.substr(0, dot_pos);
-    std::string ep      = r.substr(dot_pos + 1);
-    np.resize(8);
-    ep.resize(3);
-
-    r = np
-        + (ep.empty() ? "" : ".") // add dot if extension is not empty
-        + ep;
 
     auto       it  = r.begin();
     const auto end = r.end();

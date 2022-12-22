@@ -1,7 +1,5 @@
 #pragma once
 
-#include <bits/c++config.h>
-#include <bits/stdint-uintn.h>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>

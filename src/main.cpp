@@ -1,6 +1,8 @@
 #include <iostream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
+#include <typeinfo>
 
 #include "poc.hpp"
 
@@ -21,9 +23,9 @@ int main(int argc, char *argv[])
     {
         run(args);
     }
-    catch (const std::exception &e)
+    catch (const std::runtime_error &e)
     {
-        std::cerr << "error: " << e.what() << std::endl;
+        std::cerr << typeid(e).name() << ": " << e.what() << std::endl;
         return 2;
     }
 
