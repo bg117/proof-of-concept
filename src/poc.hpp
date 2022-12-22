@@ -184,10 +184,11 @@ class file_allocation_table
     std::size_t _Get_cluster(std::size_t cluster_number) const;
     void        _Set_cluster(std::size_t cluster_number, std::size_t next);
 
-    std::vector<std::size_t> _Get_cluster_chain(std::size_t start_cluster);
+    std::vector<std::size_t>
+    _Get_cluster_chain(std::size_t start_cluster) const;
 
     std::size_t _Get_next_free_cluster(
-        std::size_t start_cluster = 1 /* start_cluster + 1 == 2*/);
+        std::size_t start_cluster = 1 /* start_cluster + 1 == 2*/) const;
 
     std::size_t _Get_sector_from_cluster(std::size_t cluster) const;
 

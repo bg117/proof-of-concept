@@ -570,7 +570,7 @@ void poc::file_allocation_table::_Set_cluster(std::size_t cluster_number,
 }
 
 std::vector<std::size_t>
-poc::file_allocation_table::_Get_cluster_chain(std::size_t start_cluster)
+poc::file_allocation_table::_Get_cluster_chain(std::size_t start_cluster) const
 {
     std::vector<std::size_t> chain;
     std::size_t              cluster = start_cluster;
@@ -585,8 +585,8 @@ poc::file_allocation_table::_Get_cluster_chain(std::size_t start_cluster)
     return chain;
 }
 
-std::size_t
-poc::file_allocation_table::_Get_next_free_cluster(std::size_t start_cluster)
+std::size_t poc::file_allocation_table::_Get_next_free_cluster(
+    std::size_t start_cluster) const
 {
 
     switch (m_version)
@@ -718,6 +718,18 @@ poc::file_allocation_table::convert_normal_to_8_3(std::string_view name)
     std::string r = name.data();
     std::string result;
     result.reserve(11);
+
+    // resize components such that the part before the dot is at most 8
+    // characters and the part after the dot is at most 3 characters
+    auto        dot_pos = r.find('.');
+    std::string np      = r.substr(0, dot_pos);
+    std::string ep      = r.substr(dot_pos + 1);
+    np.resize(8);
+    ep.resize(3);
+
+    r = np
+        + (ep.empty() ? "" : ".") // add dot if extension is not empty
+        + ep;
 
     auto       it  = r.begin();
     const auto end = r.end();
