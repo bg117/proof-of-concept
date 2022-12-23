@@ -3,29 +3,203 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <ctime>
+#include <fstream>
 #include <iterator>
 #include <sstream>
-#include <unordered_set>
 
-#define FAT_STRING_TO_CHAR_ARRAY(x) (reinterpret_cast<const char *>(x))
+// why not? this stuff clutters the header file when it's only ever used within
+// this translation unit
+#pragma pack(push, 1)
+struct bios_parameter_block
+{
+    uint8_t  jmp[3];
+    uint8_t  oem_name[8];
+    uint16_t bytes_per_sector;
+    uint8_t  sectors_per_cluster;
+    uint16_t reserved_sectors;
+    uint8_t  number_of_fats;
+    uint16_t root_dir_entries;
+    uint16_t total_sectors_16;
+    uint8_t  media_descriptor;
+    uint16_t sectors_per_fat_16;
+    uint16_t sectors_per_track;
+    uint16_t number_of_heads;
+    uint32_t number_of_hidden_sectors;
+    uint32_t total_sectors_32;
 
-#define IS_BIT_SET(x, bit) (((x) & (bit)) == (bit))
+    union
+    {
+        struct
+        {
+            uint8_t  drive_number;
+            uint8_t  reserved;
+            uint8_t  boot_signature;
+            uint32_t volume_id;
+            uint8_t  volume_label[11];
+            uint8_t  file_system_type[8];
+        } fat12_16;
 
-#define ROUND_UP(x, y) (((x) + (y)-1) / (y) * (y))
+        struct
+        {
+            uint32_t sectors_per_fat_32;
+            uint16_t extended_flags;
+            uint16_t fs_version;
+            uint32_t root_cluster;
+            uint16_t fs_info;
+            uint16_t backup_boot_sector;
+            uint8_t  zero[12];
+            uint8_t  drive_number;
+            uint8_t  reserved;
+            uint8_t  boot_signature;
+            uint32_t volume_id;
+            uint8_t  volume_label[11];
+            uint8_t  file_system_type[8];
+        } fat32;
+    } offset_36;
+};
+
+enum dir_entry_attr
+{
+    read_only   = 0x01,
+    hidden      = 0x02,
+    system_file = 0x04,
+    volume_id   = 0x08,
+    directory   = 0x10,
+    archive     = 0x20,
+    long_name   = read_only | hidden | system_file | volume_id
+};
+
+struct dir_entry_date_fmt
+{
+    uint8_t day   : 5;
+    uint8_t month : 4;
+    uint8_t year  : 7; // since 1980
+};
+
+struct dir_entry_time_fmt
+{
+    uint8_t second : 5;
+    uint8_t minute : 6;
+    uint8_t hour   : 5;
+};
+
+struct dir_entry
+{
+
+    uint8_t            name[8];
+    uint8_t            extension[3];
+    uint8_t            attributes;
+    uint8_t            reserved;
+    uint8_t            creation_time_tenths;
+    dir_entry_time_fmt creation_time;
+    dir_entry_date_fmt creation_date;
+    dir_entry_date_fmt last_access_date;
+    uint16_t           first_cluster_high;
+    dir_entry_time_fmt last_modification_time;
+    dir_entry_date_fmt last_modification_date;
+    uint16_t           first_cluster_low;
+    uint32_t           file_size;
+};
+
+#pragma pack(pop)
+struct poc::file_allocation_table::impl
+{
+  public:
+    impl(std::string_view path);
+
+    std::vector<file_info> read_directory(std::string_view path);
+    std::vector<std::byte> read_file(std::string_view path);
+
+    void write_file(std::string_view path, const std::vector<std::byte> &data);
+
+  private:
+    std::fstream m_fs;
+
+    // do not modify
+    // {
+    file_system_version m_version;
+
+    bios_parameter_block   m_bpb;
+    std::vector<std::byte> m_fat;
+
+    std::size_t m_sectors_per_fat;
+    std::size_t m_total_fat_sectors;
+    std::size_t m_root_dir_sectors;
+    std::size_t m_data_sectors;
+    std::size_t m_first_root_dir_sector;
+    std::size_t m_first_data_sector;
+    std::size_t m_first_fat_sector;
+    std::size_t m_total_sectors;
+    std::size_t m_total_clusters;
+    std::size_t m_bytes_per_cluster;
+
+    std::size_t m_end_of_chain;
+    // }
+
+    std::vector<std::byte> read_file(std::string_view path, bool is_directory);
+
+    std::vector<dir_entry> read_raw_directory(std::string_view path);
+
+    std::size_t extract_cluster(std::size_t cluster_number) const;
+    void        set_cluster(std::size_t cluster_number, std::size_t next);
+
+    std::vector<std::size_t>
+    extract_cluster_chain(std::size_t start_cluster) const;
+
+    std::size_t get_next_free_cluster(
+        std::size_t start_cluster = 1 /* start_cluster + 1 == 2*/) const;
+
+    std::size_t convert_cluster_to_sector(std::size_t cluster) const;
+
+    bool is_end_of_cluster_chain(std::size_t cluster) const;
+};
 
 namespace
 {
 std::string trim_string(const std::string &str);
-std::time_t convert_fat_to_unix_time(std::uint16_t date, std::uint16_t time);
+
+std::string convert_normal_to_8_3(std::string_view name);
+std::string convert_8_3_to_normal(std::string_view name);
+
 std::vector<std::string> convert_path_to_fat_path(std::string_view path);
+
+std::time_t convert_fat_to_unix_time(dir_entry_time_fmt date,
+                                     dir_entry_date_fmt time);
+
+constexpr int round_up(int num, int multiple);
+
+constexpr bool is_bit_set(int seq, int bit);
 } // namespace
 
 poc::file_allocation_table::file_allocation_table(std::string_view path)
-    : m_fs(), m_bpb(), m_fat(), m_root_dir()
+{
+    m_impl = std::make_unique<impl>(path);
+}
+
+poc::file_allocation_table::~file_allocation_table() = default;
+
+std::vector<poc::file_info>
+poc::file_allocation_table::read_directory(const std::string_view path)
+{
+    return m_impl->read_directory(path);
+}
+
+std::vector<std::byte>
+poc::file_allocation_table::read_file(const std::string_view path)
+{
+    return m_impl->read_file(path);
+}
+
+void poc::file_allocation_table::write_file(std::string_view              path,
+                                            const std::vector<std::byte> &data)
+{
+    m_impl->write_file(path, data);
+}
+
+poc::file_allocation_table::impl::impl(std::string_view path)
+    : m_fs(), m_bpb(), m_fat()
 {
     m_fs.open(path.data(), std::ios::binary | std::ios::in | std::ios::out);
     if (!m_fs.is_open())
@@ -51,7 +225,7 @@ poc::file_allocation_table::file_allocation_table(std::string_view path)
         m_first_root_dir_sector +
         m_bpb.root_dir_entries
             /* in FAT32, the root directory is part of the data region */
-            * sizeof(_Dir_entry) / m_bpb.bytes_per_sector;
+            * sizeof(dir_entry) / m_bpb.bytes_per_sector;
 
     m_data_sectors   = m_total_sectors - m_first_data_sector;
     m_total_clusters = m_data_sectors / m_bpb.sectors_per_cluster;
@@ -71,49 +245,8 @@ poc::file_allocation_table::file_allocation_table(std::string_view path)
     m_fs.seekg(m_first_fat_sector * m_bpb.bytes_per_sector);
     m_fs.read(reinterpret_cast<char *>(m_fat.data()), m_fat.size());
 
-    m_end_of_chain = _Get_cluster(1); // end of chain marker is stored in the
-                                      // second entry of the FAT table
-
-    // copy root directory to struct
-    if (m_version != file_system_version::fat32)
-    {
-        // root directory in FAT12 and FAT16 has a fixed size and is located at
-        // a fixed offset (directly after the FAT table)
-        m_root_dir.resize(m_bpb.root_dir_entries * sizeof(_Dir_entry));
-
-        m_fs.seekg(m_first_root_dir_sector * m_bpb.bytes_per_sector);
-        m_fs.read(reinterpret_cast<char *>(m_root_dir.data()),
-                  m_root_dir.size());
-    }
-    else
-    {
-        const std::size_t entries_per_cluster =
-            m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector /
-            sizeof(_Dir_entry); // just for readability
-
-        std::size_t cluster  = m_bpb.offset_36.fat32.root_cluster;
-        std::size_t new_size = 0;
-
-        do
-        {
-            // seek to position of cluster in disk
-            m_fs.seekg(_Get_sector_from_cluster(cluster) *
-                       m_bpb.bytes_per_sector);
-
-            new_size += entries_per_cluster;
-            m_root_dir.resize(new_size);
-
-            // read cluster
-            m_fs.read(reinterpret_cast<char *>(m_root_dir.data() + new_size -
-                                               entries_per_cluster),
-                      sizeof(_Dir_entry) * entries_per_cluster);
-
-            // get next cluster index
-            cluster = _Get_cluster(cluster);
-        } while (cluster < 0x0FFFFFF0);
-        // indices greater than 0x0FFFFFF0 are either damaged or indicates the
-        // last cluster in the chain
-    }
+    m_end_of_chain = extract_cluster(1); // end of chain marker is stored in the
+                                         // second entry of the FAT table
 
     if (m_version == file_system_version::fat32)
     {
@@ -122,44 +255,44 @@ poc::file_allocation_table::file_allocation_table(std::string_view path)
     }
 }
 
-std::vector<poc::directory_entry>
-poc::file_allocation_table::read_directory(const std::string_view path)
+std::vector<poc::file_info>
+poc::file_allocation_table::impl::read_directory(const std::string_view path)
 {
-    std::vector<directory_entry> dir{}; // user-readable directory
-    std::vector<_Dir_entry>      raw_dir =
-        _Read_directory_raw(path); // "raw" directory (as it is on disk)
+    std::vector<file_info> dir{}; // user-readable directory
+    std::vector<dir_entry> raw_dir =
+        read_raw_directory(path); // "raw" directory (as it is on disk)
 
     // convert to user-readable directory
     std::transform(
-        m_root_dir.begin(),
-        m_root_dir.end(),
-        dir.begin(),
-        [&](const _Dir_entry &x) {
+        raw_dir.begin(),
+        raw_dir.end(),
+        std::back_inserter(dir),
+        [&](const dir_entry &x) {
             // convert name and extension to "normal" format
             std::string name =
                 // 8 characters for name
-                std::string(FAT_STRING_TO_CHAR_ARRAY(x.name),
+                std::string(reinterpret_cast<const char *>(x.name),
                             std::size(x.name)) +
                 // 3 characters for extension
-                std::string(FAT_STRING_TO_CHAR_ARRAY(x.extension),
+                std::string(reinterpret_cast<const char *>(x.extension),
                             std::size(x.extension));
 
-            return directory_entry{
-                .name               = convert_8_3_to_normal(name),
-                .creation_timestamp = convert_fat_to_unix_time(
-                    _Get_uint16_t_from_timestamp(x.creation_time),
-                    _Get_uint16_t_from_timestamp(x.creation_date)),
+            return file_info{
+                .name = convert_8_3_to_normal(name),
+                .creation_timestamp =
+                    convert_fat_to_unix_time(x.creation_time, x.creation_date),
 
-                .last_modification_timestamp = convert_fat_to_unix_time(
-                    _Get_uint16_t_from_timestamp(x.last_modification_time),
-                    _Get_uint16_t_from_timestamp(x.last_modification_date)),
+                .last_modification_timestamp =
+                    convert_fat_to_unix_time(x.last_modification_time,
+                                             x.last_modification_date),
 
-                .last_access_date = convert_fat_to_unix_time(
-                    0,
-                    _Get_uint16_t_from_timestamp(x.last_access_date)),
+                .last_access_date =
+                    convert_fat_to_unix_time({}, x.last_access_date),
+
+                .size = x.file_size,
 
                 .is_directory =
-                    IS_BIT_SET(x.attributes, _Dir_entry_attr::directory),
+                    is_bit_set(x.attributes, dir_entry_attr::directory),
             };
         });
 
@@ -167,13 +300,14 @@ poc::file_allocation_table::read_directory(const std::string_view path)
 }
 
 std::vector<std::byte>
-poc::file_allocation_table::read_file(const std::string_view path)
+poc::file_allocation_table::impl::read_file(const std::string_view path)
 {
-    return _Read_file_internal(path, false);
+    return read_file(path, false);
 }
 
-void poc::file_allocation_table::write_file(std::string_view              path,
-                                            const std::vector<std::byte> &data)
+void poc::file_allocation_table::impl::write_file(
+    std::string_view              path,
+    const std::vector<std::byte> &data)
 {
     if (trim_string(path.data()).empty())
         throw errors::invalid_path_error{"path is empty"};
@@ -203,8 +337,8 @@ void poc::file_allocation_table::write_file(std::string_view              path,
                    path_components.end() - 1,
                    std::ostream_iterator<std::string>(oss, "\\"),
                    convert_8_3_to_normal);
-    const std::string       parent_dir = "\\" + oss.str();
-    std::vector<_Dir_entry> parent     = _Read_directory_raw(parent_dir);
+    const std::string      parent_dir = "\\" + oss.str();
+    std::vector<dir_entry> parent     = read_raw_directory(parent_dir);
 
     const std::size_t m_bytes_per_cluster =
         m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector;
@@ -216,10 +350,10 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     const std::time_t now_t  = std::chrono::system_clock::to_time_t(now);
     const std::tm *   now_tm = std::localtime(&now_t);
 
-    std::size_t next = _Get_next_free_cluster();
+    std::size_t next = get_next_free_cluster();
 
-    _Dir_entry_date_fmt date;
-    _Dir_entry_time_fmt time;
+    dir_entry_date_fmt date;
+    dir_entry_time_fmt time;
 
     date.day   = now_tm->tm_mday;
     date.month = now_tm->tm_mon + 1;
@@ -231,7 +365,7 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     time.minute = now_tm->tm_min;
     time.second = now_tm->tm_sec / 2; // 2 second resolution
 
-    _Dir_entry entry;
+    dir_entry entry;
 
     // copy filename
     for (int i = 0; i < 8; i++)
@@ -241,7 +375,7 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     for (int i = 0; i < 3; i++)
         entry.extension[i] = filename[i + 8];
 
-    entry.attributes = static_cast<uint8_t>(_Dir_entry_attr::archive);
+    entry.attributes = static_cast<uint8_t>(dir_entry_attr::archive);
 
     // set fields
     entry.creation_date          = date;
@@ -255,7 +389,7 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     entry.file_size              = data.size();
 
     const std::size_t data_size_in_bytes_rounded =
-        ROUND_UP(data.size(), m_bytes_per_cluster);
+        round_up(data.size(), m_bytes_per_cluster);
     const std::size_t data_size_in_clusters =
         data_size_in_bytes_rounded / m_bytes_per_cluster;
 
@@ -298,10 +432,10 @@ void poc::file_allocation_table::write_file(std::string_view              path,
         std::size_t current = next;
 
         // if we're at the last cluster, we need to set the end of chain marker
-        next = i < data_size_in_clusters - 1 ? _Get_next_free_cluster(current)
+        next = i < data_size_in_clusters - 1 ? get_next_free_cluster(current)
                                              : end_of_chain_marker;
 
-        _Set_cluster(current, next);
+        set_cluster(current, next);
         saved_clusters.emplace_back(current);
     }
 
@@ -338,7 +472,7 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     // get sector from cluster
     const std::size_t self_lba = p == 0
                                      ? m_first_root_dir_sector
-                                     : _Get_sector_from_cluster(self_cluster);
+                                     : convert_cluster_to_sector(self_cluster);
 
     // only perform directory checks if either
     //   - we're not in the root directory
@@ -346,24 +480,24 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     if (p >= 2 || (p == 0 && m_version == file_system_version::fat32))
     {
         std::vector<std::size_t> dir_cluster_chain =
-            _Get_cluster_chain(self_cluster);
+            extract_cluster_chain(self_cluster);
 
         const std::size_t entries_per_cluster =
-            m_bytes_per_cluster / sizeof(_Dir_entry);
+            m_bytes_per_cluster / sizeof(dir_entry);
 
         // if we're exceeding the cluster boundary, we need to allocate a new
         // cluster
-        if (ROUND_UP(new_dir_size, m_bytes_per_cluster) >
-            ROUND_UP(old_dir_size, m_bytes_per_cluster))
+        if (round_up(new_dir_size, m_bytes_per_cluster) >
+            round_up(old_dir_size, m_bytes_per_cluster))
         {
-            std::size_t new_cluster = _Get_next_free_cluster(self_cluster);
+            std::size_t new_cluster = get_next_free_cluster(self_cluster);
             dir_cluster_chain.emplace_back(new_cluster);
-            _Set_cluster(self_cluster, new_cluster);
-            _Set_cluster(new_cluster, end_of_chain_marker);
+            set_cluster(self_cluster, new_cluster);
+            set_cluster(new_cluster, end_of_chain_marker);
         }
 
         const std::size_t new_dir_clusters =
-            ROUND_UP(new_dir_size, m_bytes_per_cluster) / m_bytes_per_cluster;
+            round_up(new_dir_size, m_bytes_per_cluster) / m_bytes_per_cluster;
 
         // pad directory with 0s up until the next cluster boundary
         parent.resize(entries_per_cluster * new_dir_clusters);
@@ -373,10 +507,10 @@ void poc::file_allocation_table::write_file(std::string_view              path,
         // write directory
         for (const auto &cluster : dir_cluster_chain)
         {
-            m_fs.seekp(_Get_sector_from_cluster(cluster) *
+            m_fs.seekp(convert_cluster_to_sector(cluster) *
                        m_bpb.bytes_per_sector);
-            m_fs.write(FAT_STRING_TO_CHAR_ARRAY(parent.data() +
-                                                i * entries_per_cluster),
+            m_fs.write(reinterpret_cast<const char *>(parent.data() +
+                                                      i * entries_per_cluster),
                        m_bytes_per_cluster);
             i++;
         }
@@ -388,8 +522,8 @@ void poc::file_allocation_table::write_file(std::string_view              path,
 
         // write directory
         m_fs.seekp(self_lba * m_bpb.bytes_per_sector);
-        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(parent.data()),
-                   parent.size() * sizeof(_Dir_entry));
+        m_fs.write(reinterpret_cast<const char *>(parent.data()),
+                   parent.size() * sizeof(dir_entry));
     }
 
     // write FAT
@@ -397,57 +531,57 @@ void poc::file_allocation_table::write_file(std::string_view              path,
     {
         m_fs.seekp((m_first_fat_sector + i * m_sectors_per_fat) *
                    m_bpb.bytes_per_sector);
-        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(m_fat.data()),
+        m_fs.write(reinterpret_cast<const char *>(m_fat.data()),
                    m_sectors_per_fat * m_bpb.bytes_per_sector);
     }
 
     // write data
     for (int i = 0; i < saved_clusters.size(); i++)
     {
-        m_fs.seekp(_Get_sector_from_cluster(saved_clusters[i]) *
+        m_fs.seekp(convert_cluster_to_sector(saved_clusters[i]) *
                    m_bpb.bytes_per_sector);
-        m_fs.write(FAT_STRING_TO_CHAR_ARRAY(cluster_division[i].data()),
+        m_fs.write(reinterpret_cast<const char *>(cluster_division[i].data()),
                    m_bytes_per_cluster);
     }
 }
 
 std::vector<std::byte>
-poc::file_allocation_table::_Read_file_internal(const std::string_view path,
-                                                bool is_directory)
+poc::file_allocation_table::impl::read_file(const std::string_view path,
+                                            bool                   is_directory)
 {
     if (trim_string(path.data()).empty())
         throw errors::invalid_path_error{"path is empty"};
 
     std::vector<std::string> path_components = convert_path_to_fat_path(path);
 
-    std::vector<std::byte>  contents{};
-    std::vector<_Dir_entry> parent = m_root_dir;
+    std::vector<std::byte> contents{};
+    std::vector<dir_entry> parent =
+        read_raw_directory("\\"); // read root directory
 
     for (std::size_t i = 0; i < path_components.size(); ++i)
     {
         auto &x = path_components[i];
 
         // find directory entry
-        auto entry = std::find_if(
-            parent.begin(),
-            parent.end(),
-            [&](const _Dir_entry &y) {
-                const bool v1 = std::strncmp(x.data(),
-                                             FAT_STRING_TO_CHAR_ARRAY(y.name),
-                                             8) == 0;
-                const bool v2 =
+        auto entry =
+            std::find_if(parent.begin(), parent.end(), [&](const dir_entry &y) {
+                const bool v1 = // compare first 8 characters
+                    std::strncmp(x.data(),
+                                 reinterpret_cast<const char *>(y.name),
+                                 8) == 0;
+                const bool v2 = // compare last 3 characters
                     std::strncmp(x.data() + 8,
-                                 FAT_STRING_TO_CHAR_ARRAY(y.extension),
+                                 reinterpret_cast<const char *>(y.extension),
                                  3) == 0;
 
                 // if there are more path components then this one must be a
                 // directory otherwise, if is_directory is true then this one
                 // must be a directory, else a file
-                if (is_directory)
+                if (i < path_components.size() - 1 || is_directory)
                 {
                     return v1 && v2 &&
                            (y.attributes &
-                            static_cast<int>(_Dir_entry_attr::directory));
+                            static_cast<int>(dir_entry_attr::directory));
                 }
 
                 return v1 && v2;
@@ -470,7 +604,7 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
         // if entry is file and there are more path components then
         // throwm_version exception
         if (i < path_components.size() - 1 &&
-            !(entry->attributes & static_cast<int>(_Dir_entry_attr::directory)))
+            !(entry->attributes & static_cast<int>(dir_entry_attr::directory)))
         {
             throw errors::invalid_file_operation_error{
                 "file '" + convert_8_3_to_normal(x) +
@@ -484,7 +618,7 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
         do
         {
             // seek to position of cluster in disk
-            m_fs.seekg(_Get_sector_from_cluster(cluster) *
+            m_fs.seekg(convert_cluster_to_sector(cluster) *
                        m_bpb.bytes_per_sector);
 
             new_size += m_bytes_per_cluster;
@@ -495,22 +629,22 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
                                                m_bytes_per_cluster),
                       m_bytes_per_cluster);
 
-            cluster = _Get_cluster(cluster);
-        } while (!_Is_end_of_chain(cluster));
+            cluster = extract_cluster(cluster);
+        } while (!is_end_of_cluster_chain(cluster));
 
         // if there are more path components then set parent to contents
         if (i != path_components.size() - 1)
         {
             const std::byte * ptr = contents.data();
-            const std::size_t len = contents.size() / sizeof(_Dir_entry);
-            const auto        arr = reinterpret_cast<const _Dir_entry *>(ptr);
+            const std::size_t len = contents.size() / sizeof(dir_entry);
+            const auto        arr = reinterpret_cast<const dir_entry *>(ptr);
 
             parent = std::vector(arr, arr + len);
 
             // get iterator to first null entry
             auto it = std::find_if(parent.begin(),
                                    parent.end(),
-                                   [](const _Dir_entry &x) {
+                                   [](const dir_entry &x) {
                                        return x.name[0] == '\0';
                                    });
 
@@ -527,8 +661,8 @@ poc::file_allocation_table::_Read_file_internal(const std::string_view path,
     return contents;
 }
 
-std::size_t
-poc::file_allocation_table::_Get_cluster(std::size_t cluster_number) const
+std::size_t poc::file_allocation_table::impl::extract_cluster(
+    std::size_t cluster_number) const
 {
     std::size_t cluster = cluster_number;
 
@@ -563,8 +697,8 @@ poc::file_allocation_table::_Get_cluster(std::size_t cluster_number) const
     return cluster;
 }
 
-void poc::file_allocation_table::_Set_cluster(std::size_t cluster_number,
-                                              std::size_t next)
+void poc::file_allocation_table::impl::set_cluster(std::size_t cluster_number,
+                                                   std::size_t next)
 {
     std::size_t cluster = cluster_number;
 
@@ -592,7 +726,8 @@ void poc::file_allocation_table::_Set_cluster(std::size_t cluster_number,
 }
 
 std::vector<std::size_t>
-poc::file_allocation_table::_Get_cluster_chain(std::size_t start_cluster) const
+poc::file_allocation_table::impl::extract_cluster_chain(
+    std::size_t start_cluster) const
 {
     std::vector<std::size_t> chain;
     std::size_t              cluster = start_cluster;
@@ -601,13 +736,13 @@ poc::file_allocation_table::_Get_cluster_chain(std::size_t start_cluster) const
     do
     {
         chain.emplace_back(cluster);
-        cluster = _Get_cluster(cluster);
-    } while (!_Is_end_of_chain(cluster));
+        cluster = extract_cluster(cluster);
+    } while (!is_end_of_cluster_chain(cluster));
 
     return chain;
 }
 
-std::size_t poc::file_allocation_table::_Get_next_free_cluster(
+std::size_t poc::file_allocation_table::impl::get_next_free_cluster(
     std::size_t start_cluster) const
 {
 
@@ -665,34 +800,70 @@ std::size_t poc::file_allocation_table::_Get_next_free_cluster(
     return 0;
 }
 
-std::vector<poc::file_allocation_table::_Dir_entry>
-poc::file_allocation_table::_Read_directory_raw(std::string_view path)
+std::vector<dir_entry>
+poc::file_allocation_table::impl::read_raw_directory(std::string_view path)
 {
-    std::vector<_Dir_entry> raw_dir{}; // "raw" directory (as it is on disk)
+    std::vector<dir_entry> raw_dir{}; // "raw" directory (as it is on disk)
 
     // if root path is given then return root directory
     if (trim_string(path.data()) == "\\")
     {
-        raw_dir = m_root_dir;
+        if (m_version != file_system_version::fat32)
+        {
+            // root directory in FAT12 and FAT16 has a fixed size and is located
+            // at a fixed offset (directly after the FAT table)
+            raw_dir.resize(m_bpb.root_dir_entries * sizeof(dir_entry));
+
+            m_fs.seekg(m_first_root_dir_sector * m_bpb.bytes_per_sector);
+            m_fs.read(reinterpret_cast<char *>(raw_dir.data()), raw_dir.size());
+        }
+        else
+        {
+            const std::size_t entries_per_cluster =
+                m_bpb.sectors_per_cluster * m_bpb.bytes_per_sector /
+                sizeof(dir_entry); // just for readability
+
+            std::size_t cluster  = m_bpb.offset_36.fat32.root_cluster;
+            std::size_t new_size = 0;
+
+            do
+            {
+                // seek to position of cluster in disk
+                m_fs.seekg(convert_cluster_to_sector(cluster) *
+                           m_bpb.bytes_per_sector);
+
+                new_size += entries_per_cluster;
+                raw_dir.resize(new_size);
+
+                // read cluster
+                m_fs.read(reinterpret_cast<char *>(raw_dir.data() + new_size -
+                                                   entries_per_cluster),
+                          sizeof(dir_entry) * entries_per_cluster);
+
+                // get next cluster index
+                cluster = extract_cluster(cluster);
+            } while (cluster < 0x0FFFFFF0);
+            // indices greater than 0x0FFFFFF0 are either damaged or indicates
+            // the last cluster in the chain
+        }
     }
     else
     {
-        std::vector<std::byte> contents = _Read_file_internal(path, true);
+        std::vector<std::byte> contents = read_file(path, true);
 
         const std::byte * ptr = contents.data(); // pointer to contents
         const std::size_t len =
-            contents.size() / sizeof(_Dir_entry); // amount of entries
-        const auto arr =
-            reinterpret_cast<const _Dir_entry *>(ptr); // cast to
-                                                       // array of
-                                                       // _Dir_entry
+            contents.size() / sizeof(dir_entry); // amount of entries
+        const auto arr = reinterpret_cast<const dir_entry *>(ptr); // cast to
+                                                                   // array of
+                                                                   // dir_entry
 
         raw_dir.assign(arr, arr + len);
     }
 
     // get iterator to first null entry
     auto it =
-        std::find_if(raw_dir.begin(), raw_dir.end(), [](const _Dir_entry &x) {
+        std::find_if(raw_dir.begin(), raw_dir.end(), [](const dir_entry &x) {
             return x.name[0] == '\0';
         });
 
@@ -702,26 +873,14 @@ poc::file_allocation_table::_Read_directory_raw(std::string_view path)
     return raw_dir;
 }
 
-std::size_t
-poc::file_allocation_table::_Get_sector_from_cluster(std::size_t cluster) const
+std::size_t poc::file_allocation_table::impl::convert_cluster_to_sector(
+    std::size_t cluster) const
 {
     return (cluster - 2) * m_bpb.sectors_per_cluster + m_first_data_sector;
 }
 
-std::uint16_t poc::file_allocation_table::_Get_uint16_t_from_timestamp(
-    const _Dir_entry_time_fmt &time_format) const
-{
-    return *reinterpret_cast<const uint16_t *>(&time_format);
-}
-
-std::uint16_t poc::file_allocation_table::_Get_uint16_t_from_timestamp(
-    const _Dir_entry_date_fmt &date_format) const
-{
-
-    return *reinterpret_cast<const uint16_t *>(&date_format);
-}
-
-bool poc::file_allocation_table::_Is_end_of_chain(std::size_t cluster) const
+bool poc::file_allocation_table::impl::is_end_of_cluster_chain(
+    std::size_t cluster) const
 {
     bool is_eoc      = cluster == m_end_of_chain;
     bool is_reserved = ((m_version == file_system_version::fat12 &&
@@ -734,8 +893,22 @@ bool poc::file_allocation_table::_Is_end_of_chain(std::size_t cluster) const
     return is_eoc || is_reserved;
 }
 
-std::string
-poc::file_allocation_table::convert_normal_to_8_3(std::string_view name)
+namespace
+{
+std::string trim_string(const std::string &str)
+{
+    std::string result = str;
+    result.erase(std::find_if(result.rbegin(),
+                              result.rend(),
+                              [](const char c) {
+                                  return c != ' ';
+                              })
+                     .base(),
+                 result.end());
+    return result;
+}
+
+std::string convert_normal_to_8_3(std::string_view name)
 {
     std::string r = name.data();
     std::string result;
@@ -770,8 +943,7 @@ poc::file_allocation_table::convert_normal_to_8_3(std::string_view name)
     return result;
 }
 
-std::string
-poc::file_allocation_table::convert_8_3_to_normal(std::string_view name)
+std::string convert_8_3_to_normal(std::string_view name)
 {
     std::string r = name.data();
     // if r is not 11 characters long, resize and optionally pad with spaces
@@ -817,40 +989,19 @@ poc::file_allocation_table::convert_8_3_to_normal(std::string_view name)
     return result;
 }
 
-namespace
-{
-std::string trim_string(const std::string &str)
-{
-    std::string result = str;
-    result.erase(std::find_if(result.rbegin(),
-                              result.rend(),
-                              [](const char c) {
-                                  return c != ' ';
-                              })
-                     .base(),
-                 result.end());
-    return result;
-}
-
-std::time_t convert_fat_to_unix_time(std::uint16_t date, std::uint16_t time)
+std::time_t convert_fat_to_unix_time(dir_entry_time_fmt time,
+                                     dir_entry_date_fmt date)
 {
     std::tm t = {
-        .tm_sec = (time & 0x001F) * 2, // bottom 5 bits, multiply by 2 because
-                                       // FAT time is in 2 second intervals
-
-        .tm_min = (time & 0x07E0) >> 5, // middle 6 bits
-
-        .tm_hour = (time & 0xF800) >> 11, // top 5 bits
-
-        .tm_mday = (date & 0x1F), // bottom 5 bits
-
-        .tm_mon = ((date & 0x1E0) >> 5) - 1, // middle 4 bits, subtract 1
-                                             // because FAT month is 1-12 and
-                                             // tm_mon is 0-11
-
-        .tm_year = ((date & 0xFE00) >> 9) + 80, // top 7 bits, add 80 because
-                                                // FAT year starts from 1980 and
-                                                // tm_year is 1900-...
+        .tm_sec = time.second *
+                  2, // multiply by 2 because FAT time is in 2 second intervals
+        .tm_min  = time.minute,
+        .tm_hour = time.hour,
+        .tm_mday = date.day,
+        .tm_mon  = date.month -
+                  1, // subtract 1 because FAT month is 1-12 and m_mon is 0-11
+        .tm_year = date.year + 80 // add 80 because FAT year starts from 1980
+                                  // and tm_year is 1900-...
     };
 
     return std::mktime(&t);
@@ -866,11 +1017,7 @@ std::vector<std::string> convert_path_to_fat_path(std::string_view path)
 
     // split on backslash
     while (std::getline(ss, tmp, '\\'))
-    {
-        path_components.emplace_back(
-            poc::file_allocation_table::convert_normal_to_8_3(
-                trim_string(tmp)));
-    }
+        path_components.emplace_back(convert_normal_to_8_3(trim_string(tmp)));
 
     path_components.erase(
         std::remove_if(path_components.begin(),
@@ -882,5 +1029,15 @@ std::vector<std::string> convert_path_to_fat_path(std::string_view path)
     path_components.shrink_to_fit();
 
     return path_components;
+}
+
+constexpr int round_up(int num, int multiple)
+{
+    return ((num + multiple - 1) / multiple) * multiple;
+}
+
+constexpr bool is_bit_set(int seq, int bit)
+{
+    return (seq & bit) == bit;
 }
 } // namespace

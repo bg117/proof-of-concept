@@ -1,10 +1,12 @@
+#include "fs_errors.hpp"
+#include "poc.hpp"
+
+#include <cstddef>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
-
-#include "poc.hpp"
 
 void run(const std::vector<std::string> &args);
 
@@ -14,8 +16,8 @@ int main(int argc, char *argv[])
 
     if (args.size() < 3)
     {
-        std::cerr << "usage: " << args[0] << " <volume> <read|view|write> <args...>"
-                  << std::endl;
+        std::cerr << "usage: " << args[0]
+                  << " <volume> <read|view|write> <args...>" << std::endl;
         return 1;
     }
 
@@ -23,9 +25,24 @@ int main(int argc, char *argv[])
     {
         run(args);
     }
+    catch (const poc::errors::invalid_file_operation_error &e)
+    {
+        std::cerr << "invalid file operation error: " << e.what() << std::endl;
+        return 3;
+    }
+    catch (const poc::errors::invalid_path_error &e)
+    {
+        std::cerr << "invalid path error: " << e.what() << std::endl;
+        return 3;
+    }
+    catch (const poc::errors::file_system_error &e)
+    {
+        std::cerr << "generic file system error: " << e.what() << std::endl;
+        return 3;
+    }
     catch (const std::runtime_error &e)
     {
-        std::cerr << typeid(e).name() << ": " << e.what() << std::endl;
+        std::cerr << "error: " << e.what() << std::endl;
         return 2;
     }
 
@@ -42,16 +59,38 @@ void run(const std::vector<std::string> &args)
                                  "\""};
     }
 
+    if (args[3].find('/') != std::string::npos)
+    {
+        throw poc::errors::invalid_path_error{
+            "forward slash detected in file name; please use backslashes "
+            "for separating directories"};
+    }
+
     if (args[2] == "read")
     {
         std::cout << reinterpret_cast<char *>(imp.read_file(args[3]).data());
     }
     else if (args[2] == "view")
     {
-        std::vector<poc::directory_entry> entries = imp.read_directory(args[3]);
+        std::vector<poc::file_info> entries = imp.read_directory(args[3]);
 
         for (const auto &entry : entries)
-            std::cout << "Name: " << entry.name << std::endl;
+        {
+            std::cout << "Name: " << entry.name;
+            if (entry.is_directory)
+                std::cout << " (directory)";
+            else
+                std::cout << "\n  size: " << entry.size << " bytes";
+
+            std::cout << "\n  created: "
+                      << std::ctime(&entry.creation_timestamp);
+            std::cout << "  last modified: "
+                      << std::ctime(&entry.last_modification_timestamp);
+            std::cout << "  last accessed: "
+                      << std::ctime(&entry.last_access_date);
+
+            std::cout << std::endl;
+        }
     }
     else if (args[2] == "write")
     {
@@ -60,9 +99,6 @@ void run(const std::vector<std::string> &args)
             throw std::runtime_error{"missing data for command \"" + args[2] +
                                      " " + args[3] + "\""};
         }
-
-        if (args[3].find('/') != std::string::npos)
-            throw std::runtime_error{"use backslash as path separator"};
 
         // convert args[4] to vector<std::byte>
         std::vector<std::byte> data;
