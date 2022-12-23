@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace poc::errors
+namespace fatfs::errors
 {
 class file_system_error : public std::runtime_error
 {
@@ -52,4 +52,4 @@ class invalid_file_operation_error : public file_system_error
     {
     }
 };
-} // namespace poc::errors
+} // namespace fatfs::errors

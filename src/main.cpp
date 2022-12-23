@@ -1,23 +1,21 @@
-#include "fs_errors.hpp"
-#include "poc.hpp"
+#include "fatfs/errors.hpp"
+#include "fatfs/file_allocation_table.hpp"
 
 #include <cstddef>
 #include <iostream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
-#include <typeinfo>
 
 void run(const std::vector<std::string> &args);
 
-int main(int argc, char *argv[])
+int main(const int argc, char *argv[])
 {
-    std::vector<std::string> args{argv, argv + argc};
+    const std::vector<std::string> args{argv, argv + argc};
 
     if (args.size() < 3)
     {
         std::cerr << "usage: " << args[0]
-                  << " <volume> <read|view|write> <args...>" << std::endl;
+            << " <volume> <read|view|write> <args...>" << std::endl;
         return 1;
     }
 
@@ -25,17 +23,17 @@ int main(int argc, char *argv[])
     {
         run(args);
     }
-    catch (const poc::errors::invalid_file_operation_error &e)
+    catch (const fatfs::errors::invalid_file_operation_error &e)
     {
         std::cerr << "invalid file operation error: " << e.what() << std::endl;
         return 3;
     }
-    catch (const poc::errors::invalid_path_error &e)
+    catch (const fatfs::errors::invalid_path_error &e)
     {
         std::cerr << "invalid path error: " << e.what() << std::endl;
         return 3;
     }
-    catch (const poc::errors::file_system_error &e)
+    catch (const fatfs::errors::file_system_error &e)
     {
         std::cerr << "generic file system error: " << e.what() << std::endl;
         return 3;
@@ -51,7 +49,7 @@ int main(int argc, char *argv[])
 
 void run(const std::vector<std::string> &args)
 {
-    poc::file_allocation_table imp{args[1]};
+    const fatfs::file_allocation_table imp{args[1]};
 
     if (args.size() < 4)
     {
@@ -61,7 +59,7 @@ void run(const std::vector<std::string> &args)
 
     if (args[3].find('/') != std::string::npos)
     {
-        throw poc::errors::invalid_path_error{
+        throw fatfs::errors::invalid_path_error{
             "forward slash detected in file name; please use backslashes "
             "for separating directories"};
     }
@@ -72,22 +70,23 @@ void run(const std::vector<std::string> &args)
     }
     else if (args[2] == "view")
     {
-        std::vector<poc::file_info> entries = imp.read_directory(args[3]);
+        const std::vector<fatfs::file_info> entries = imp.read_directory(args[3]);
 
-        for (const auto &entry : entries)
+        for (const auto &[name, creation_timestamp, last_modification_timestamp,
+                 last_access_date, size, is_directory] : entries)
         {
-            std::cout << "Name: " << entry.name;
-            if (entry.is_directory)
+            std::cout << "Name: " << name;
+            if (is_directory)
                 std::cout << " (directory)";
             else
-                std::cout << "\n  size: " << entry.size << " bytes";
+                std::cout << "\n  size: " << size << " bytes";
 
             std::cout << "\n  created: "
-                      << std::ctime(&entry.creation_timestamp);
+                << std::ctime(&creation_timestamp);
             std::cout << "  last modified: "
-                      << std::ctime(&entry.last_modification_timestamp);
+                << std::ctime(&last_modification_timestamp);
             std::cout << "  last accessed: "
-                      << std::ctime(&entry.last_access_date);
+                << std::ctime(&last_access_date);
 
             std::cout << std::endl;
         }
