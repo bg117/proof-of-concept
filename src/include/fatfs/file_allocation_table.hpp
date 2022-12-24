@@ -44,7 +44,9 @@ class file_allocation_table
     [[nodiscard]] std::vector<file_info> read_directory(std::string_view path) const;
     [[nodiscard]] std::vector<std::byte> read_file(std::string_view path) const;
 
-    void write_file(std::string_view path, const std::vector<std::byte> &data) const;
+    void create_file(std::string_view path, const std::vector<std::byte> &data) const;
+    
+    void create_directory(std::string_view path) const;
 
     [[nodiscard]] file_system_version version() const;
   private:

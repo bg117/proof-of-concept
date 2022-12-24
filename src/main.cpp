@@ -106,6 +106,6 @@ void run(const std::vector<std::string> &args)
         for (const auto &c : args[4])
             data.push_back(static_cast<std::byte>(c));
 
-        imp.write_file(args[3], data);
+        imp.create_file(args[3], data);
     }
 }

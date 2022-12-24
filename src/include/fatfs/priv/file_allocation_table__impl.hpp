@@ -3,6 +3,7 @@
 #include "priv.hpp"
 
 #include <fstream>
+#include <vector>
 
 FATFS_BEGIN_PRIV_NS
 
@@ -36,7 +37,7 @@ struct bios_parameter_block
             uint32_t volume_id;
             uint8_t  volume_label[11];
             uint8_t  file_system_type[8];
-        }            fat12_16;
+        } fat12_16;
 
         struct
         {
@@ -53,33 +54,33 @@ struct bios_parameter_block
             uint32_t volume_id;
             uint8_t  volume_label[11];
             uint8_t  file_system_type[8];
-        }            fat32;
-    }                offset_36;
+        } fat32;
+    } offset_36;
 };
 
 enum dir_entry_attr
 {
-    read_only = 0x01,
-    hidden = 0x02,
+    read_only   = 0x01,
+    hidden      = 0x02,
     system_file = 0x04,
-    volume_id = 0x08,
-    directory = 0x10,
-    archive = 0x20,
-    long_name = read_only | hidden | system_file | volume_id
+    volume_id   = 0x08,
+    directory   = 0x10,
+    archive     = 0x20,
+    long_name   = read_only | hidden | system_file | volume_id
 };
 
 struct dir_entry_date_fmt
 {
-    uint8_t day : 5;
+    uint8_t day   : 5;
     uint8_t month : 4;
-    uint8_t year : 7; // since 1980
+    uint8_t year  : 7; // since 1980
 };
 
 struct dir_entry_time_fmt
 {
     uint8_t second : 5;
     uint8_t minute : 6;
-    uint8_t hour : 5;
+    uint8_t hour   : 5;
 };
 
 struct dir_entry
@@ -105,17 +106,19 @@ FATFS_END_PRIV_NS
 
 class fatfs::file_allocation_table::impl
 {
-public:
+  public:
     explicit impl(std::string_view path);
 
     std::vector<file_info> read_directory(std::string_view path);
     std::vector<std::byte> read_file(std::string_view path);
 
-    void write_file(std::string_view path, const std::vector<std::byte> &data);
+    void create_file(std::string_view path, const std::vector<std::byte> &data);
+
+    void create_directory(std::string_view path);
 
     [[nodiscard]] file_system_version version() const;
 
-private:
+  private:
     std::fstream m_fs;
 
     // do not modify
@@ -140,8 +143,11 @@ private:
 
     std::vector<std::byte> read_file(std::string_view path, bool is_directory);
 
-    std::vector<priv::dir_entry> read_raw_directory(
-        std::string_view path);
+    std::vector<priv::dir_entry> read_raw_directory(std::string_view path);
+
+    void create_directory_entry(std::string_view              path,
+                                const std::vector<std::byte> &data,
+                                bool                          is_directory);
 
     [[nodiscard]] std::size_t extract_cluster(std::size_t cluster_number) const;
     void set_cluster(std::size_t cluster_number, std::size_t next);
