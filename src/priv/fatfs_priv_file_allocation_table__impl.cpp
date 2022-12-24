@@ -1,7 +1,7 @@
 #include "fatfs/errors.hpp"
 #include "fatfs/file_allocation_table.hpp"
 
-#define FATFS_ALLOW_PRIV_IMPL
+#define FATFS_ALLOW_PRIV_NS
 #include "fatfs/priv/file_allocation_table__impl.hpp"
 
 #include <algorithm>

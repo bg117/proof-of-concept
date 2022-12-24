@@ -1,7 +1,5 @@
 #pragma once
 
-#define FATFS_ALLOW_PRIV_NS
-
 #include "priv.hpp"
 
 #include <fstream>
