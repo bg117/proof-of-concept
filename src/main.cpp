@@ -91,12 +91,19 @@ void run(const std::vector<std::string> &args)
             std::cout << std::endl;
         }
     }
-    else if (args[2] == "write")
+    else if (args[2] == "create")
     {
         if (args.size() < 5)
         {
             throw std::runtime_error{"missing data for command \"" + args[2] +
                                      " " + args[3] + "\""};
+        }
+
+        // if args[3] is "-d", create a directory
+        if (args[3] == "-d")
+        {
+            imp.create_directory(args[4]);
+            return;
         }
 
         // convert args[4] to vector<std::byte>

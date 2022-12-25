@@ -25,6 +25,9 @@ std::vector<std::string> convert_path_to_fat_path(std::string_view path);
 std::time_t convert_fat_to_unix_time(fatfs::priv::dir_entry_time_fmt time,
                                      fatfs::priv::dir_entry_date_fmt date);
 
+void get_now_as_fat_time(fatfs::priv::dir_entry_time_fmt &time,
+                         fatfs::priv::dir_entry_date_fmt &date);
+
 constexpr int round_up(int num, int multiple);
 
 constexpr bool is_bit_set(int seq, int bit);
@@ -98,7 +101,8 @@ fatfs::file_allocation_table::impl::read_directory(const std::string_view path)
         raw_dir.begin(),
         raw_dir.end(),
         std::back_inserter(dir),
-        [&](const priv::dir_entry &x) {
+        [&](const priv::dir_entry &x)
+        {
             // convert name and extension to "normal" format
             const std::string name =
                 // 8 characters for name
@@ -136,11 +140,12 @@ std::vector<std::byte>
 fatfs::file_allocation_table::impl::read_file(const std::string_view path,
                                               const bool is_directory)
 {
-    if (trim_string(path.data()).empty())
+    std::string npath = trim_string(path.data());
+    if (npath.empty())
         throw errors::invalid_path_error{"path is empty"};
 
     const std::vector<std::string> path_components =
-        convert_path_to_fat_path(path);
+        convert_path_to_fat_path(npath);
 
     std::vector<std::byte>       contents{};
     std::vector<priv::dir_entry> parent =
@@ -154,7 +159,8 @@ fatfs::file_allocation_table::impl::read_file(const std::string_view path,
         auto entry = std::find_if(
             parent.begin(),
             parent.end(),
-            [&](const priv::dir_entry &y) {
+            [&](const priv::dir_entry &y)
+            {
                 const bool v1 = // compare first 8 characters
                     std::strncmp(x.data(),
                                  reinterpret_cast<const char *>(y.name),
@@ -187,7 +193,7 @@ fatfs::file_allocation_table::impl::read_file(const std::string_view path,
                 "file '" + convert_8_3_to_normal(x) + "' not found"};
         }
 
-        // if entry is file and there are more path components then
+        // if entry is file and there are more path components, then
         // throw exception
         if (i < path_components.size() - 1 &&
             !(entry->attributes & static_cast<int>(priv::directory)))
@@ -218,10 +224,10 @@ fatfs::file_allocation_table::impl::read_file(const std::string_view path,
             cluster = extract_cluster(cluster);
         } while (!is_end_of_cluster_chain(cluster));
 
-        // if there are more path components then set parent to contents
+        // if there are more path components, then set parent to contents
         if (i != path_components.size() - 1)
         {
-            const std::byte * ptr = contents.data();
+            const std::byte  *ptr = contents.data();
             const std::size_t len = contents.size() / sizeof(priv::dir_entry);
             const auto arr = reinterpret_cast<const priv::dir_entry *>(ptr);
 
@@ -230,7 +236,8 @@ fatfs::file_allocation_table::impl::read_file(const std::string_view path,
             // get iterator to first null entry
             const auto it = std::find_if(parent.begin(),
                                          parent.end(),
-                                         [](const priv::dir_entry &x) {
+                                         [](const priv::dir_entry &x)
+                                         {
                                              return x.name[0] == '\0';
                                          });
 
@@ -329,6 +336,89 @@ void fatfs::file_allocation_table::impl::create_file(
 
 void fatfs::file_allocation_table::impl::create_directory(std::string_view path)
 {
+    std::size_t cluster =
+        get_next_free_cluster(); // save first cluster as we're going to create
+                                 // a new directory entry
+
+    create_directory_entry(path, {}, true);
+
+    std::size_t end_of_chain_marker;
+    switch (m_version)
+    {
+    case file_system_version::fat12: end_of_chain_marker = 0x0FFF; break;
+    case file_system_version::fat16: end_of_chain_marker = 0xFFFF; break;
+    case file_system_version::fat32: end_of_chain_marker = 0x0FFFFFFF; break;
+    }
+
+    set_cluster(cluster, end_of_chain_marker);
+
+    // write FAT
+    for (int i = 0; i < m_bpb.number_of_fats; i++)
+    {
+        m_fs.seekp((m_first_fat_sector + i * m_sectors_per_fat) *
+                   m_bpb.bytes_per_sector);
+        m_fs.write(reinterpret_cast<const char *>(m_fat.data()),
+                   m_sectors_per_fat * m_bpb.bytes_per_sector);
+    }
+
+    // create . and ..
+    priv::dir_entry_time_fmt time{};
+    priv::dir_entry_date_fmt date{};
+
+    get_now_as_fat_time(time, date);
+
+    const std::size_t entries_per_cluster =
+        m_bytes_per_cluster / sizeof(priv::dir_entry);
+
+    std::vector<priv::dir_entry> entries(entries_per_cluster);
+    auto                         entry1 = entries.begin();
+
+    entry1->name[0] = '.';
+
+    entry1->attributes = priv::directory;
+
+    // set fields
+    entry1->creation_date          = date;
+    entry1->creation_time          = time;
+    entry1->creation_time_tenths   = 0;
+    entry1->last_access_date       = date;
+    entry1->first_cluster_high     = cluster >> 16; // high 16 bits
+    entry1->last_modification_time = time;
+    entry1->last_modification_date = date;
+    entry1->first_cluster_low      = cluster & 0xFFFF; // low 16 bits
+    entry1->file_size              = 0;
+
+    // no difference between . and .. except for first cluster
+    // get parent directory
+    std::vector<std::string> path_components = convert_path_to_fat_path(path);
+    std::ostringstream       oss{};
+    std::transform(path_components.begin(),
+                   path_components.end(),
+                   std::ostream_iterator<std::string>(oss, "\\"),
+                   convert_8_3_to_normal);
+
+    const std::string            parent_dir = "\\" + oss.str();
+    std::vector<priv::dir_entry> parent     = read_raw_directory(parent_dir);
+
+    // root directory does not contain . and .. entries
+    bool is_parent_root =
+        std::strncmp(reinterpret_cast<const char *>(parent[0].name),
+                     ".          ",
+                     11) != 0;
+
+    auto entry2 = entries.begin() + 1;
+    // copy entry1 to entry2
+    std::memcpy(&*entry2, &*entry1, sizeof(priv::dir_entry));
+    entry2->name[1] = '.';
+    entry2->first_cluster_high =
+        is_parent_root ? 0 : parent[0].first_cluster_high;
+    entry2->first_cluster_low =
+        is_parent_root ? 0 : parent[0].first_cluster_low;
+
+    // write directory
+    m_fs.seekp(convert_cluster_to_sector(cluster) * m_bpb.bytes_per_sector);
+    m_fs.write(reinterpret_cast<const char *>(entries.data()),
+               m_bytes_per_cluster);
 }
 
 fatfs::file_system_version fatfs::file_allocation_table::impl::version() const
@@ -341,15 +431,16 @@ void fatfs::file_allocation_table::impl::create_directory_entry(
     const std::vector<std::byte> &data, // only if file
     bool                          is_directory)
 {
-    if (trim_string(path.data()).empty())
+    std::string npath = trim_string(path.data());
+    if (npath.empty())
         throw errors::invalid_path_error{"path is empty"};
 
     bool exists = true;
     try
     {
-        read_file(path, is_directory);
+        read_file(npath, is_directory);
     }
-    catch (const errors::file_not_found_error &)
+    catch (...)
     {
         exists = false;
     }
@@ -357,46 +448,46 @@ void fatfs::file_allocation_table::impl::create_directory_entry(
     if (exists)
     {
         if (is_directory)
-            throw errors::file_already_exists_error{
-                "directory " + std::string{path} + " already exists"};
+            throw errors::file_already_exists_error{"directory " + npath +
+                                                    " already exists"};
 
         throw errors::file_already_exists_error{
-            "file " + std::string{path} +
+            "file " + npath +
             " already exists"}; // easy way out; we'll fix this later
     }
 
-    std::vector<std::string> path_components = convert_path_to_fat_path(path);
-
     // get parent directory
-    std::ostringstream oss{};
+    std::vector<std::string> path_components = convert_path_to_fat_path(npath);
+    std::ostringstream       oss{};
     std::transform(path_components.begin(),
                    path_components.end() - 1,
                    std::ostream_iterator<std::string>(oss, "\\"),
                    convert_8_3_to_normal);
+
     const std::string            parent_dir = "\\" + oss.str();
     std::vector<priv::dir_entry> parent     = read_raw_directory(parent_dir);
 
     const std::string &filename = path_components.back();
 
+    // dir_entry::name[0] == 0x20 is illegal
+    if (filename[0] == ' ')
+    {
+        throw errors::invalid_path_error{
+            "first character of name shall not be 0x20 (or shall not start "
+            "with a period)"};
+    }
+
     const std::chrono::system_clock::time_point now =
         std::chrono::system_clock::now();
     const std::time_t now_t  = std::chrono::system_clock::to_time_t(now);
-    const std::tm *   now_tm = std::localtime(&now_t);
+    const std::tm    *now_tm = std::localtime(&now_t);
 
     std::size_t next = get_next_free_cluster();
 
-    priv::dir_entry_date_fmt date{};
     priv::dir_entry_time_fmt time{};
+    priv::dir_entry_date_fmt date{};
 
-    date.day   = now_tm->tm_mday;
-    date.month = now_tm->tm_mon + 1;
-    date.year =
-        now_tm->tm_year - 80; // 1980 is the base year; (struct tm*)->tm_year is
-    // the number of years since 1900
-
-    time.hour   = now_tm->tm_hour;
-    time.minute = now_tm->tm_min;
-    time.second = now_tm->tm_sec / 2; // 2 second resolution
+    get_now_as_fat_time(time, date);
 
     priv::dir_entry entry{};
 
@@ -466,7 +557,7 @@ void fatfs::file_allocation_table::impl::create_directory_entry(
 
     // only perform directory checks if either
     //   - we're not in the root directory
-    //   - we're in the root directory and we're in a FAT32 volume
+    //   - we're in the root directory, and we're in a FAT32 volume
     if (p >= 2 || (p == 0 && m_version == file_system_version::fat32))
     {
         std::vector<std::size_t> dir_cluster_chain =
@@ -712,7 +803,7 @@ fatfs::file_allocation_table::impl::read_raw_directory(
     {
         const std::vector<std::byte> contents = read_file(path, true);
 
-        const std::byte * ptr = contents.data(); // pointer to contents
+        const std::byte  *ptr = contents.data(); // pointer to contents
         const std::size_t len =
             contents.size() / sizeof(priv::dir_entry); // amount of entries
         const auto arr =
@@ -726,7 +817,8 @@ fatfs::file_allocation_table::impl::read_raw_directory(
     // get iterator to first null entry
     const auto it = std::find_if(raw_dir.begin(),
                                  raw_dir.end(),
-                                 [](const priv::dir_entry &x) {
+                                 [](const priv::dir_entry &x)
+                                 {
                                      return x.name[0] == '\0';
                                  });
 
@@ -760,7 +852,8 @@ std::string trim_string(const std::string &str)
     std::string result = str;
     result.erase(std::find_if(result.rbegin(),
                               result.rend(),
-                              [](const char c) {
+                              [](const char c)
+                              {
                                   return c != ' ';
                               })
                      .base(),
@@ -770,7 +863,14 @@ std::string trim_string(const std::string &str)
 
 std::string convert_normal_to_8_3(const std::string_view name)
 {
-    std::string r = name.data();
+    std::string r = trim_string(name.data());
+
+    if (r == ".")
+        return ".          ";
+
+    if (r == "..")
+        return "..         ";
+
     std::string result;
     result.reserve(11);
 
@@ -805,7 +905,14 @@ std::string convert_normal_to_8_3(const std::string_view name)
 
 std::string convert_8_3_to_normal(const std::string_view name)
 {
-    std::string r = name.data();
+    std::string r = trim_string(name.data());
+
+    if (r == ".          ")
+        return ".";
+
+    if (r == "..         ")
+        return "..";
+
     // if r is not 11 characters long, resize and optionally pad with spaces
     if (r.size() != 11)
         r.resize(11, ' ');
@@ -823,7 +930,8 @@ std::string convert_8_3_to_normal(const std::string_view name)
     // remove trailing spaces
     result.erase(std::find_if(result.rbegin(),
                               result.rend(),
-                              [](const char c) {
+                              [](const char c)
+                              {
                                   return c != ' ';
                               })
                      .base(),
@@ -840,7 +948,8 @@ std::string convert_8_3_to_normal(const std::string_view name)
     // remove trailing spaces
     result.erase(std::find_if(result.rbegin(),
                               result.rend(),
-                              [](const char c) {
+                              [](const char c)
+                              {
                                   return c != ' ';
                               })
                      .base(),
@@ -881,13 +990,33 @@ std::vector<std::string> convert_path_to_fat_path(const std::string_view path)
     path_components.erase(
         std::remove_if(path_components.begin(),
                        path_components.end(),
-                       [](const std::string_view x) {
+                       [](const std::string_view x)
+                       {
                            return trim_string(x.data()).empty();
                        }),
         path_components.end());
     path_components.shrink_to_fit();
 
     return path_components;
+}
+
+void get_now_as_fat_time(fatfs::priv::dir_entry_time_fmt &time,
+                         fatfs::priv::dir_entry_date_fmt &date)
+{
+    const std::chrono::system_clock::time_point now =
+        std::chrono::system_clock::now();
+    const std::time_t now_t  = std::chrono::system_clock::to_time_t(now);
+    const std::tm    *now_tm = std::localtime(&now_t);
+
+    date.day   = now_tm->tm_mday;
+    date.month = now_tm->tm_mon + 1;
+    date.year =
+        now_tm->tm_year - 80; // 1980 is the base year; (struct tm*)->tm_year is
+    // the number of years since 1900
+
+    time.hour   = now_tm->tm_hour;
+    time.minute = now_tm->tm_min;
+    time.second = now_tm->tm_sec / 2; // 2 second resolution
 }
 
 constexpr int round_up(const int num, const int multiple)

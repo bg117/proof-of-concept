@@ -20,12 +20,12 @@ Reads a file from the volume and prints it to stdout.
 fatfs <volume> read <file>
 ```
 
-#### `write`
+#### `create`
 
-Writes a file to the volume.
+Creates a file or directory
 
 ```
-fatfs <volume> write <file> <contents>
+fatfs <volume> create [-d <directory>|<file> <data>]
 ```
 
 #### `view`
